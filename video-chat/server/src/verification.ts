@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { Sex } from "./config.ts";
-import { getUserById, type User } from "./users.ts";
+import { getDb } from "./db.ts";
+import { loadUser, type User } from "./users.ts";
 
-// Result a vendor (Yoti, Veriff, Persona, ...) reports after ID + selfie + face match.
+// Result a vendor (Didit, Yoti, Veriff, Persona, ...) reports after ID + selfie + face match.
 // We keep only these fields. The ID images stay with the vendor.
 export interface VerificationResult {
   userId: string;
@@ -17,13 +18,14 @@ export interface VerificationProvider {
   startSession(user: User, returnUrl: string): Promise<{ url: string; reference: string }>;
 }
 
-export function applyVerificationResult(result: VerificationResult): User | undefined {
-  const user = getUserById(result.userId);
-  if (!user) return undefined;
-  user.verificationRef = result.reference;
-  user.verifiedAdult = result.approved && result.isAdult;
-  user.verifiedSex = user.verifiedAdult ? result.documentSex : null;
-  return user;
+export async function applyVerificationResult(result: VerificationResult): Promise<User | undefined> {
+  const verifiedAdult = result.approved && result.isAdult;
+  const rows = await getDb().query(
+    `update users set verification_ref = $2, verified_adult = $3, verified_sex = $4
+     where id = $1 returning id`,
+    [result.userId, result.reference, verifiedAdult, verifiedAdult ? result.documentSex : null],
+  );
+  return rows.length ? loadUser(result.userId) : undefined;
 }
 
 // Development stand-in for a real vendor. Its hosted page is /dev/verify.html,

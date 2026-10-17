@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { ADULT_PRICING, REFUND_POLICY, type CreditPack } from "./config.ts";
-import { allUsers, creditBalance, getUserById, type CreditLot, type User } from "./users.ts";
+import { getDb } from "./db.ts";
+import { creditBalance, loadUser, type CreditLot, type User } from "./users.ts";
 
 const DAY_MS = 86_400_000;
 
@@ -23,73 +24,73 @@ export type Notice =
 
 export type RefundReason = "requested" | "inactivity" | "shutdown";
 
-// Every refund attempt, for the books and for following up on failures.
-export interface RefundRecord {
-  userId: string;
-  paymentRef: string;
-  amountCents: number;
-  credits: number;
-  reason: RefundReason;
-  succeeded: boolean;
-  at: number;
-}
-
-// In-memory for the MVP; store alongside users in the database.
-const appliedPayments = new Set<string>();
-export const refundLog: RefundRecord[] = [];
-let salesClosed = false;
-
-export function areSalesClosed(): boolean {
-  return salesClosed;
+export async function areSalesClosed(): Promise<boolean> {
+  const [row] = await getDb().query<{ value: boolean }>("select value from settings where key = 'sales_closed'");
+  return row?.value === true;
 }
 
 // Called from the processor's "payment succeeded" webhook. Processors retry
-// webhooks, so the same payment can arrive more than once and must only add
-// credits once.
-export function grantCredits(
+// webhooks; the payment reference is the primary key, so a repeat adds nothing.
+export async function grantCredits(
   userId: string,
   pack: Pick<CreditPack, "credits" | "priceCents">,
   paymentRef: string,
   email?: string,
   now = Date.now(),
-): User | undefined {
-  const user = getUserById(userId);
-  if (!user) return undefined;
-  if (appliedPayments.has(paymentRef)) return user;
-  appliedPayments.add(paymentRef);
-  user.creditLots.push({
-    paymentRef,
-    purchasedAt: now,
-    packCredits: pack.credits,
-    packCents: pack.priceCents,
-    remaining: pack.credits,
-    refundFailed: false,
+): Promise<User | undefined> {
+  const db = getDb();
+  const exists = await db.query("select 1 from users where id = $1", [userId]);
+  if (!exists.length) return undefined;
+  await db.transaction(async (tx) => {
+    await tx.query(
+      `insert into credit_lots (payment_ref, user_id, purchased_at, pack_credits, pack_cents, remaining)
+       values ($1, $2, $3, $4, $5, $4) on conflict (payment_ref) do nothing`,
+      [paymentRef, userId, new Date(now), pack.credits, pack.priceCents],
+    );
+    if (email) await tx.query("update users set email = $2 where id = $1", [userId, email]);
   });
-  if (email) user.email = email;
-  return user;
+  return loadUser(userId);
 }
 
 export type SpendResult = "ok" | "insufficient_credits";
 
 // Spends credits on 24h of adult access, oldest purchase first. Extends an
 // active pass rather than resetting it, so unlocking early never loses time.
-export function spendOnDayPass(user: User, now = Date.now()): SpendResult {
-  let cost = ADULT_PRICING.dayPassCredits;
-  if (creditBalance(user) < cost) return "insufficient_credits";
-  for (const lot of user.creditLots) {
-    const take = Math.min(lot.remaining, cost);
-    lot.remaining -= take;
-    cost -= take;
-    if (cost === 0) break;
-  }
-  const start = Math.max(now, user.adultPassExpiresAt ?? 0);
-  user.adultPassExpiresAt = start + ADULT_PRICING.dayPassHours * 3_600_000;
-  return "ok";
+// Locks the user's credits so two requests at once can't spend the same credit.
+export async function spendOnDayPass(userId: string, now = Date.now()): Promise<SpendResult> {
+  const result = await getDb().transaction(async (tx) => {
+    const [user] = await tx.query<{ adult_pass_expires_at: Date | null }>(
+      "select adult_pass_expires_at from users where id = $1 for update",
+      [userId],
+    );
+    if (!user) return "insufficient_credits" as const;
+    const lots = await tx.query<{ payment_ref: string; remaining: number }>(
+      `select payment_ref, remaining from credit_lots
+       where user_id = $1 and remaining > 0 order by purchased_at, payment_ref for update`,
+      [userId],
+    );
+    let cost = ADULT_PRICING.dayPassCredits;
+    if (lots.reduce((sum, l) => sum + l.remaining, 0) < cost) return "insufficient_credits" as const;
+    for (const lot of lots) {
+      const take = Math.min(lot.remaining, cost);
+      await tx.query("update credit_lots set remaining = remaining - $2 where payment_ref = $1", [lot.payment_ref, take]);
+      cost -= take;
+      if (cost === 0) break;
+    }
+    const start = Math.max(now, user.adult_pass_expires_at?.getTime() ?? 0);
+    await tx.query("update users set adult_pass_expires_at = $2 where id = $1", [
+      userId,
+      new Date(start + ADULT_PRICING.dayPassHours * 3_600_000),
+    ]);
+    return "ok" as const;
+  });
+  await loadUser(userId);
+  return result;
 }
 
 // What's left of a purchase in cents: the charge minus the value of credits
 // used, with rounding in the customer's favor. All unused = full charge back.
-export function refundValueCents(lot: CreditLot): number {
+export function refundValueCents(lot: Pick<CreditLot, "packCredits" | "packCents" | "remaining">): number {
   const used = lot.packCredits - lot.remaining;
   return lot.packCents - Math.floor((used * lot.packCents) / lot.packCredits);
 }
@@ -106,54 +107,92 @@ export interface RefundSummary {
 }
 
 // Refunds every unused credit back to the charge it came from. Credits whose
-// refund fails stay on the account (still usable) and are flagged for a manual
+// refund fails go back on the account (still usable), flagged for a manual
 // refund by another method.
 export async function refundUnusedCredits(
-  user: User,
+  userId: string,
   provider: PaymentProvider,
   reason: RefundReason,
   now = Date.now(),
 ): Promise<RefundSummary> {
+  const db = getDb();
   const summary: RefundSummary = { refundedCents: 0, refundedCredits: 0, failedCents: 0, failedCredits: 0 };
-  for (const lot of user.creditLots) {
-    if (lot.remaining === 0) continue;
-    // The automatic sweep doesn't keep retrying refunds that already failed.
-    if (reason === "inactivity" && lot.refundFailed) continue;
-    const amountCents = refundValueCents(lot);
-    const credits = lot.remaining;
-    const succeeded = await provider.refund(lot.paymentRef, amountCents);
-    refundLog.push({ userId: user.id, paymentRef: lot.paymentRef, amountCents, credits, reason, succeeded, at: now });
+  // The automatic sweep doesn't keep retrying refunds that already failed.
+  const lots = await db.query<{ payment_ref: string }>(
+    `select payment_ref from credit_lots where user_id = $1 and remaining > 0
+     ${reason === "inactivity" ? "and not refund_failed" : ""} order by purchased_at, payment_ref`,
+    [userId],
+  );
+
+  for (const { payment_ref } of lots) {
+    // Claim the lot's credits (so they can't be spent or refunded twice while
+    // the processor call is in flight) and log the attempt as pending.
+    const claim = await db.transaction(async (tx) => {
+      const [lot] = await tx.query<{ remaining: number; pack_credits: number; pack_cents: number }>(
+        "select remaining, pack_credits, pack_cents from credit_lots where payment_ref = $1 and remaining > 0 for update",
+        [payment_ref],
+      );
+      if (!lot) return null;
+      const amountCents = refundValueCents({ packCredits: lot.pack_credits, packCents: lot.pack_cents, remaining: lot.remaining });
+      await tx.query("update credit_lots set remaining = 0 where payment_ref = $1", [payment_ref]);
+      const [refund] = await tx.query<{ id: string }>(
+        `insert into refunds (user_id, payment_ref, amount_cents, credits, reason, created_at)
+         values ($1, $2, $3, $4, $5, $6) returning id`,
+        [userId, payment_ref, amountCents, lot.remaining, reason, new Date(now)],
+      );
+      return { refundId: refund.id, credits: lot.remaining, amountCents };
+    });
+    if (!claim) continue;
+
+    const succeeded = await provider.refund(payment_ref, claim.amountCents).catch(() => false);
+    await db.transaction(async (tx) => {
+      await tx.query("update refunds set succeeded = $2 where id = $1", [claim.refundId, succeeded]);
+      if (succeeded) {
+        await tx.query("update credit_lots set refund_failed = false where payment_ref = $1", [payment_ref]);
+      } else {
+        await tx.query("update credit_lots set remaining = remaining + $2, refund_failed = true where payment_ref = $1", [
+          payment_ref,
+          claim.credits,
+        ]);
+      }
+    });
     if (succeeded) {
-      lot.remaining = 0;
-      lot.refundFailed = false;
-      summary.refundedCents += amountCents;
-      summary.refundedCredits += credits;
+      summary.refundedCents += claim.amountCents;
+      summary.refundedCredits += claim.credits;
     } else {
-      lot.refundFailed = true;
-      summary.failedCents += amountCents;
-      summary.failedCredits += credits;
+      summary.failedCents += claim.amountCents;
+      summary.failedCredits += claim.credits;
     }
   }
+  await loadUser(userId);
   return summary;
 }
 
-async function refundAndNotify(user: User, provider: PaymentProvider, notifier: Notifier, reason: RefundReason, now: number) {
-  const summary = await refundUnusedCredits(user, provider, reason, now);
-  if (summary.refundedCents > 0) await notifier.notify(user, { kind: "refunded", reason, refundedCents: summary.refundedCents });
-  if (summary.failedCents > 0) await notifier.notify(user, { kind: "refund_failed", reason, failedCents: summary.failedCents });
+async function refundAndNotify(userId: string, provider: PaymentProvider, notifier: Notifier, reason: RefundReason, now: number) {
+  const summary = await refundUnusedCredits(userId, provider, reason, now);
+  const user = await loadUser(userId);
+  if (user && summary.refundedCents > 0) await notifier.notify(user, { kind: "refunded", reason, refundedCents: summary.refundedCents });
+  if (user && summary.failedCents > 0) await notifier.notify(user, { kind: "refund_failed", reason, failedCents: summary.failedCents });
   return summary;
 }
 
 // Run periodically. Reminds inactive users who hold credits, then refunds them.
 export async function runInactivitySweep(provider: PaymentProvider, notifier: Notifier, now = Date.now()): Promise<void> {
-  for (const user of allUsers()) {
-    // Skip balances whose refund already failed; retrying won't help.
-    if (!user.creditLots.some((lot) => lot.remaining > 0 && !lot.refundFailed)) continue;
+  const db = getDb();
+  const reminderCutoff = new Date(now - REFUND_POLICY.inactivityReminderDays * DAY_MS);
+  const candidates = await db.query<{ id: string }>(
+    `select distinct u.id from users u join credit_lots l on l.user_id = u.id
+     where l.remaining > 0 and not l.refund_failed and u.last_active_at <= $1`,
+    [reminderCutoff],
+  );
+  for (const { id } of candidates) {
+    const user = await loadUser(id);
+    if (!user) continue;
     const idleDays = (now - user.lastActiveAt) / DAY_MS;
     if (idleDays >= REFUND_POLICY.inactivityRefundDays) {
-      await refundAndNotify(user, provider, notifier, "inactivity", now);
-    } else if (idleDays >= REFUND_POLICY.inactivityReminderDays && !(user.inactivityReminderSentAt && user.inactivityReminderSentAt > user.lastActiveAt)) {
-      user.inactivityReminderSentAt = now;
+      await refundAndNotify(id, provider, notifier, "inactivity", now);
+    } else if (!(user.inactivityReminderSentAt && user.inactivityReminderSentAt > user.lastActiveAt)) {
+      await db.query("update users set inactivity_reminder_sent_at = $2 where id = $1", [id, new Date(now)]);
       await notifier.notify(user, {
         kind: "inactivity_reminder",
         credits: creditBalance(user),
@@ -166,17 +205,22 @@ export async function runInactivitySweep(provider: PaymentProvider, notifier: No
 // Shutting the site down: stop selling credits and refund every unused one.
 // Returns totals plus the users whose refunds failed and need paying another way.
 export async function windDown(provider: PaymentProvider, notifier: Notifier, now = Date.now()) {
-  salesClosed = true;
+  const db = getDb();
+  await db.query(
+    "insert into settings (key, value) values ('sales_closed', 'true') on conflict (key) do update set value = 'true'",
+  );
   const totals: RefundSummary = { refundedCents: 0, refundedCredits: 0, failedCents: 0, failedCredits: 0 };
   const needsManualRefund: { userId: string; email: string | null; cents: number }[] = [];
-  for (const user of allUsers()) {
-    if (creditBalance(user) === 0) continue;
-    const s = await refundAndNotify(user, provider, notifier, "shutdown", now);
+  const holders = await db.query<{ user_id: string; email: string | null }>(
+    `select distinct l.user_id, u.email from credit_lots l join users u on u.id = l.user_id where l.remaining > 0`,
+  );
+  for (const { user_id, email } of holders) {
+    const s = await refundAndNotify(user_id, provider, notifier, "shutdown", now);
     totals.refundedCents += s.refundedCents;
     totals.refundedCredits += s.refundedCredits;
     totals.failedCents += s.failedCents;
     totals.failedCredits += s.failedCredits;
-    if (s.failedCents > 0) needsManualRefund.push({ userId: user.id, email: user.email, cents: s.failedCents });
+    if (s.failedCents > 0) needsManualRefund.push({ userId: user_id, email, cents: s.failedCents });
   }
   return { ...totals, needsManualRefund };
 }

@@ -2,7 +2,7 @@ import type { WebSocket } from "ws";
 import { getIntent, type IntentId } from "./config.ts";
 import { checkAccess } from "./access.ts";
 import { Matchmaker, type Match } from "./matchmaker.ts";
-import { getUserById, getUserByToken, touch, type User } from "./users.ts";
+import { liveUser, loadUserByToken, pinUser, recordReport, touch, unpinUser, type User } from "./users.ts";
 
 const REPORTS_BEFORE_BAN = 3;
 
@@ -25,7 +25,7 @@ interface Session {
 export class SignalingHub {
   private sessions = new Map<string, Session>();
   readonly matchmaker = new Matchmaker((userId, intent) => {
-    const user = getUserById(userId);
+    const user = liveUser(userId);
     const i = getIntent(intent);
     return !!user && !!i && this.sessions.has(userId) && checkAccess(user, i) === null;
   });
@@ -36,8 +36,10 @@ export class SignalingHub {
 
   handleConnection(socket: WebSocket): void {
     let session: Session | null = null;
+    // Messages that arrive while auth is still loading the user wait for it.
+    let authed: Promise<Session | null> = Promise.resolve(null);
 
-    socket.on("message", (raw) => {
+    socket.on("message", async (raw) => {
       let msg: ClientMessage;
       try {
         msg = JSON.parse(String(raw));
@@ -46,23 +48,17 @@ export class SignalingHub {
       }
 
       if (msg.type === "auth") {
-        const user = getUserByToken(msg.token);
-        if (!user || user.banned) {
-          send(socket, { type: "error", error: user ? "banned" : "unauthorized" });
-          socket.close();
-          return;
-        }
-        touch(user);
-        // One live connection per account.
-        this.sessions.get(user.id)?.socket.close();
-        session = { user, socket, intent: null, partnerId: null };
-        this.sessions.set(user.id, session);
-        send(socket, { type: "ready" });
+        authed = this.authenticate(socket, msg.token).then((s) => (session = s));
         return;
       }
 
-      if (!session) return send(socket, { type: "error", error: "unauthorized" });
-      this.handle(session, msg);
+      const s = session ?? (await authed);
+      if (!s) return send(socket, { type: "error", error: "unauthorized" });
+      try {
+        await this.handle(s, msg);
+      } catch (err) {
+        console.error("Signaling error:", err);
+      }
     });
 
     socket.on("close", () => {
@@ -70,10 +66,28 @@ export class SignalingHub {
       this.endCall(session, "partner_left");
       this.matchmaker.remove(session.user.id);
       this.sessions.delete(session.user.id);
+      unpinUser(session.user.id);
     });
   }
 
-  private handle(s: Session, msg: ClientMessage): void {
+  private async authenticate(socket: WebSocket, token: string): Promise<Session | null> {
+    const user = await loadUserByToken(String(token)).catch(() => undefined);
+    if (!user || user.banned) {
+      send(socket, { type: "error", error: user ? "banned" : "unauthorized" });
+      socket.close();
+      return null;
+    }
+    await touch(user);
+    // One live connection per account.
+    this.sessions.get(user.id)?.socket.close();
+    pinUser(user);
+    const session: Session = { user, socket, intent: null, partnerId: null };
+    this.sessions.set(user.id, session);
+    send(socket, { type: "ready" });
+    return session;
+  }
+
+  private async handle(s: Session, msg: ClientMessage): Promise<void> {
     switch (msg.type) {
       case "join": {
         const intent = getIntent(msg.intent);
@@ -103,10 +117,9 @@ export class SignalingHub {
       case "report": {
         const partner = s.partnerId ? this.sessions.get(s.partnerId) : undefined;
         if (partner) {
-          partner.user.reportCount++;
-          console.warn(`[report] ${s.user.id} reported ${partner.user.id}: ${String(msg.reason ?? "").slice(0, 200)}`);
-          if (partner.user.reportCount >= REPORTS_BEFORE_BAN) {
-            partner.user.banned = true;
+          const reason = String(msg.reason ?? "").slice(0, 500);
+          const { banned } = await recordReport(s.user.id, partner.user.id, reason, REPORTS_BEFORE_BAN);
+          if (banned) {
             this.endCall(s, "partner_left");
             send(partner.socket, { type: "error", error: "banned" });
             partner.socket.close();

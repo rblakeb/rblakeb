@@ -14,6 +14,21 @@ npm run typecheck
 
 Open two browser windows (one in private/incognito) to match with yourself.
 
+### Database
+
+Postgres. Set `DATABASE_URL` (e.g. Supabase's connection string) and the server applies
+`server/migrations/*.sql` on startup. Without it, dev runs an embedded Postgres (PGlite)
+that keeps its data in `.data/`; delete that folder to start fresh. Tests use a fresh
+in-memory database per file. `DATABASE_URL` is required when `NODE_ENV=production`.
+
+Tables: `users` (session tokens stored hashed), `credit_lots` (one row per purchase; the
+payment reference is the primary key, so a retried webhook can't double-credit),
+`refunds` (every attempt; `succeeded` is null while in flight, so nulls left after a crash
+need checking by hand), `reports`, and `settings` (holds `sales_closed`).
+
+Users with an open WebSocket are cached in memory for signaling. That assumes a single
+server process; running several needs a shared channel (e.g. Postgres LISTEN/NOTIFY or Redis).
+
 In dev mode, age verification and payments go to mock pages (`public/dev/`) where you
 choose the outcome. Those routes are disabled when `NODE_ENV=production`.
 
@@ -59,7 +74,7 @@ Settings are `REFUND_POLICY` in `server/src/config.ts`; logic is in `server/src/
 - **Inactive accounts:** a reminder at 150 days without logging in, then an automatic refund
   at 180 days. These need to fit inside the processor's refund window, so confirm that first.
 - **Failed refunds** (expired card, charge too old) leave the credits on the account, still
-  usable, flagged for a manual refund by another method. Every attempt is in `refundLog`.
+  usable, flagged for a manual refund by another method. Every attempt is in the `refunds` table.
 - **Shutting down:** `POST /admin/wind-down` with header `x-admin-token: $ADMIN_TOKEN` stops
   credit sales and refunds every unused credit. It returns the list of users whose refunds
   failed so they can be paid another way. The route doesn't exist unless `ADMIN_TOKEN` is set.
@@ -79,8 +94,7 @@ Settings are `REFUND_POLICY` in `server/src/config.ts`; logic is in `server/src/
 - [ ] **Email**: the inactivity reminder and refund notices only log to the console. Hook
       `consoleNotifier` up to an email service; addresses come from the payment webhook.
 - [ ] **Unclaimed property**: have an accountant handle balances whose card refund failed.
-- [ ] **Database**: users, credits, the refund log and the "sales closed" flag live in
-      memory and vanish on restart. Move them to Postgres.
+- [ ] **Production database**: create the Supabase project and set `DATABASE_URL`.
 - [ ] **Server-side moderation**: on-device blurring can be bypassed by a modified client.
       Add server frame sampling (Hive, Sightengine, Rekognition), which needs media
       routed through an SFU like LiveKit instead of peer-to-peer.
