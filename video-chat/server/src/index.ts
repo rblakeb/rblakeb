@@ -3,9 +3,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
 import { WebSocketServer } from "ws";
-import { ADULT_PRICING, INTENTS, type Sex } from "./config.ts";
+import { ADULT_PRICING, CREDIT_PACKS, INTENTS, getCreditPack, type Sex } from "./config.ts";
 import { adultIsFreeFor, checkAccess, hasActivePass } from "./access.ts";
-import { grantDayPass, mockPaymentProvider } from "./billing.ts";
+import { grantCredits, mockPaymentProvider, spendOnDayPass } from "./billing.ts";
 import { SignalingHub } from "./signaling.ts";
 import { createUser, getUserByToken, publicProfile, type User } from "./users.ts";
 import { applyVerificationResult, mockVerificationProvider } from "./verification.ts";
@@ -60,7 +60,7 @@ app.get("/api/config", (_req, res) => {
   }
   res.json({
     intents: INTENTS,
-    pricing: { dayPassCents: ADULT_PRICING.dayPassCents, dayPassHours: ADULT_PRICING.dayPassHours },
+    pricing: { dayPassCredits: ADULT_PRICING.dayPassCredits, dayPassHours: ADULT_PRICING.dayPassHours, packs: CREDIT_PACKS },
     iceServers,
   });
 });
@@ -70,16 +70,28 @@ app.post("/api/verification/start", requireUser, async (req, res) => {
   res.json({ url });
 });
 
-app.post("/api/billing/day-pass", requireUser, async (req, res) => {
+app.post("/api/billing/checkout", requireUser, async (req, res) => {
   const user = (req as AuthedRequest).user;
+  // Credits only buy adult access, so don't sell them to people who can't use them.
   if (!user.verifiedAdult) return res.status(400).json({ error: "not_verified" });
   if (adultIsFreeFor(user)) return res.status(400).json({ error: "already_free" });
-  const { url } = await paymentProvider.createDayPassCheckout(user, "/");
+  const pack = getCreditPack(String(req.body?.packId));
+  if (!pack) return res.status(400).json({ error: "unknown_pack" });
+  const { url } = await paymentProvider.createCreditCheckout(user, pack, "/");
   res.json({ url });
 });
 
+app.post("/api/adult/unlock", requireUser, (req, res) => {
+  const user = (req as AuthedRequest).user;
+  if (!user.verifiedAdult) return res.status(400).json({ error: "not_verified" });
+  if (adultIsFreeFor(user)) return res.status(400).json({ error: "already_free" });
+  const result = spendOnDayPass(user);
+  if (result !== "ok") return res.status(402).json({ error: result });
+  res.json(accountState(user));
+});
+
 // Real vendor and payment webhooks go here. Each must check the vendor's
-// signature before calling applyVerificationResult / grantDayPass.
+// signature before calling applyVerificationResult / grantCredits.
 
 if (!IS_PROD) {
   // Endpoints behind the mock vendor pages in public/dev/. Never exposed in production.
@@ -97,7 +109,9 @@ if (!IS_PROD) {
   });
 
   app.post("/dev/api/payment-success", (req, res) => {
-    const user = grantDayPass(String(req.body?.userId));
+    const pack = getCreditPack(String(req.body?.packId));
+    if (!pack) return res.status(400).json({ error: "unknown_pack" });
+    const user = grantCredits(String(req.body?.userId), pack.credits, String(req.body?.reference));
     if (!user) return res.status(404).json({ error: "unknown_user" });
     res.json({ ok: true });
   });

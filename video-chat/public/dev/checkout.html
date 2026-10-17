@@ -10,7 +10,7 @@
   <section class="panel">
     <h1>Mock checkout (dev only)</h1>
     <p class="muted">In production this is the payment processor's hosted checkout (CCBill, Segpay, Epoch).</p>
-    <p>Adult day pass: <strong id="price"></strong></p>
+    <p><span id="credits"></span> credits: <strong id="price"></strong></p>
     <div class="row">
       <button id="pay" class="primary">Pay</button>
       <button id="cancel">Cancel</button>
@@ -19,13 +19,14 @@
   <script>
     const params = new URLSearchParams(location.search);
     const back = params.get("return") || "/";
+    document.getElementById("credits").textContent = params.get("credits");
     document.getElementById("price").textContent = "$" + (Number(params.get("cents")) / 100).toFixed(2);
     document.getElementById("cancel").onclick = () => (location.href = back);
     document.getElementById("pay").onclick = async () => {
       await fetch("/dev/api/payment-success", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ userId: params.get("user") }),
+        body: JSON.stringify({ userId: params.get("user"), packId: params.get("pack"), reference: params.get("ref") }),
       });
       location.href = back;
     };

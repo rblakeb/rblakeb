@@ -26,7 +26,7 @@ choose the outcome. Those routes are disabled when `NODE_ENV=production`.
 | Matching (per-intent queues, language filter that widens after 10s, shared-tag ranking, no instant re-pairs) | `server/src/matchmaker.ts` |
 | WebSocket signaling, skip, report, chat | `server/src/signaling.ts` |
 | Age verification hook | `server/src/verification.ts` |
-| Day pass billing hook | `server/src/billing.ts` |
+| Credits: buying packs and spending them on 24h access | `server/src/billing.ts` |
 | Front end (vanilla JS + WebRTC) | `public/app.js` |
 | On-device nudity blur for non-adult rooms (NSFWJS) | `public/moderation.js` |
 
@@ -34,8 +34,11 @@ choose the outcome. Those routes are disabled when `NODE_ENV=production`.
 
 - Every user needs `verifiedAdult = true`, set only by the verification vendor's result.
   We store the flag, the vendor's reference ID and the sex on the ID. No ID images.
-- Users whose verified ID says `F` get in free. Everyone else needs a $1 / 24h day pass.
-  Buying while a pass is active extends it.
+- Users whose verified ID says `F` get in free. Everyone else spends 1 credit for 24 hours.
+  Unlocking while a pass is active extends it.
+- Credits are sold in packs (5 for $5, 12 for $10, 30 for $20; edit `CREDIT_PACKS` in
+  `server/src/config.ts`) and only to verified adults who'd have to pay.
+- Each payment reference is credited once, so a retried processor webhook can't double-credit.
 - Access is checked when joining the queue, again at match time, and every second during
   a call, so an expired pass ends the call.
 - 3 reports bans an account (MVP rule).
@@ -46,7 +49,9 @@ choose the outcome. Those routes are disabled when `NODE_ENV=production`.
       (Yoti, Veriff, Persona, VerifyMy...) and add its webhook. Check the vendor's
       signature before calling `applyVerificationResult`.
 - [ ] **Payments**: replace `mockPaymentProvider` with an adult-friendly processor
-      (CCBill, Segpay, Epoch) and add its webhook calling `grantDayPass`.
+      (CCBill, Segpay, Epoch) and add its webhook calling `grantCredits`.
+- [ ] **Credit rules**: decide whether credits expire and whether unused ones are
+      refundable, and put it in the terms. Some states regulate this.
 - [ ] **Database**: users live in memory (`server/src/users.ts`) and vanish on restart.
       Move them to Postgres.
 - [ ] **Server-side moderation**: on-device blurring can be bypassed by a modified client.

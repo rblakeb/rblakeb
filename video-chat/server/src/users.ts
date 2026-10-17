@@ -11,6 +11,7 @@ export interface User {
   verifiedSex: Sex | null;
   verificationRef: string | null;
   adultPassExpiresAt: number | null;
+  credits: number;
   banned: boolean;
   reportCount: number;
 }
@@ -29,6 +30,7 @@ export function createUser(displayName: string): User {
     verifiedSex: null,
     verificationRef: null,
     adultPassExpiresAt: null,
+    credits: 0,
     banned: false,
     reportCount: 0,
   };
@@ -51,5 +53,6 @@ export function publicProfile(user: User) {
     displayName: user.displayName,
     verifiedAdult: user.verifiedAdult,
     adultPassExpiresAt: user.adultPassExpiresAt,
+    credits: user.credits,
   };
 }

@@ -23,10 +23,28 @@ export function getIntent(id: string): Intent | undefined {
 // `freeForSex` uses the sex printed on the verified ID (reported by the
 // verification vendor), not a self-selected profile field.
 export const ADULT_PRICING = {
-  dayPassCents: 100,
+  dayPassCredits: 1,
   dayPassHours: 24,
   freeForSex: ["F"] as Sex[],
 };
+
+// Credits are bought in packs so each card charge is large enough that
+// per-transaction processor fees don't eat the sale.
+export interface CreditPack {
+  id: string;
+  credits: number;
+  priceCents: number;
+}
+
+export const CREDIT_PACKS: CreditPack[] = [
+  { id: "pack5", credits: 5, priceCents: 500 },
+  { id: "pack12", credits: 12, priceCents: 1000 },
+  { id: "pack30", credits: 30, priceCents: 2000 },
+];
+
+export function getCreditPack(id: string): CreditPack | undefined {
+  return CREDIT_PACKS.find((p) => p.id === id);
+}
 
 export type Sex = "M" | "F" | "X";
 

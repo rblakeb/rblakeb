@@ -60,17 +60,50 @@ function renderAccount() {
     return;
   }
   const badge = a.adult.verified ? `<span class="badge ok">18+ verified</span>` : "";
-  $("account").innerHTML = `<span>${escapeHtml(a.user.displayName)}</span>${badge}`;
+  const credits = a.adult.verified && !a.adult.free ? `<button type="button" id="credits-badge" class="badge">${a.user.credits} credits</button>` : "";
+  $("account").innerHTML = `<span>${escapeHtml(a.user.displayName)}</span>${badge}${credits}`;
+  if (credits) $("credits-badge").onclick = showPacks;
+}
+
+function canUnlock() {
+  return state.account.user.credits >= state.config.pricing.dayPassCredits;
+}
+
+function creditLabel(n) {
+  return `${n} credit${n === 1 ? "" : "s"}`;
+}
+
+function showPacks() {
+  if ($("lobby").hidden) return;
+  const list = $("pack-list");
+  list.innerHTML = "";
+  for (const pack of state.config.pricing.packs) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "pack";
+    btn.innerHTML = `<span class="amount">${creditLabel(pack.credits)}</span><span class="price">$${(pack.priceCents / 100).toFixed(2)}</span>`;
+    btn.onclick = async () => {
+      try {
+        const { url } = await api("/api/billing/checkout", { body: { packId: pack.id } });
+        location.href = url;
+      } catch (err) {
+        $("lobby-status").textContent = `Something went wrong: ${err.message}`;
+      }
+    };
+    list.appendChild(btn);
+  }
+  $("packs").hidden = false;
+  $("packs").scrollIntoView({ behavior: "smooth" });
 }
 
 function adultStatus() {
   const access = state.account?.access?.adult;
-  const price = `$${(state.config.pricing.dayPassCents / 100).toFixed(2)}`;
+  const { dayPassCredits, dayPassHours } = state.config.pricing;
   if (access === null) {
     return state.account.adult.free ? "Free for you" : `Day pass active until ${formatTime(state.account.user.adultPassExpiresAt)}`;
   }
   if (access === "not_verified") return "Verify your age to enter";
-  if (access === "payment_required") return `${price} / ${state.config.pricing.dayPassHours}h day pass`;
+  if (access === "payment_required") return `${creditLabel(dayPassCredits)} per ${dayPassHours}h · you have ${state.account.user.credits}`;
   return "Unavailable";
 }
 
@@ -102,7 +135,10 @@ function updateStartButton() {
   btn.disabled = false;
   $("lobby-status").textContent = "";
   if (access === "not_verified") btn.textContent = "Verify my age";
-  else if (access === "payment_required") btn.textContent = `Buy day pass ($${(state.config.pricing.dayPassCents / 100).toFixed(2)})`;
+  else if (access === "payment_required") {
+    const { dayPassCredits, dayPassHours } = state.config.pricing;
+    btn.textContent = canUnlock() ? `Unlock ${dayPassHours}h for ${creditLabel(dayPassCredits)}` : "Buy credits";
+  }
   else if (access === "banned") {
     btn.textContent = "Account suspended";
     btn.disabled = true;
@@ -145,6 +181,7 @@ $("welcome-form").onsubmit = async (e) => {
 
 function enterLobby() {
   show("lobby");
+  $("packs").hidden = true;
   renderIntents();
   updateStartButton();
   connectSocket();
@@ -165,9 +202,12 @@ $("start").onclick = async () => {
       return;
     }
     if (access === "payment_required") {
-      const { url } = await api("/api/billing/day-pass", { method: "POST" });
-      location.href = url;
-      return;
+      if (!canUnlock()) return showPacks();
+      const account = await api("/api/adult/unlock", { method: "POST" });
+      state.account = account;
+      renderAccount();
+      renderIntents();
+      updateStartButton();
     }
     await startCamera();
     state.activeIntent = state.selectedIntent;

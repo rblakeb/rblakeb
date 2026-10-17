@@ -73,6 +73,13 @@ button.danger { border-color: var(--danger); color: var(--danger); }
 .intent .desc, .intent .meta { font-size: 13px; color: var(--muted); }
 .intent .cta { font-size: 13px; color: var(--adult); }
 
+.packs { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 8px; }
+.pack-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.pack { display: flex; flex-direction: column; gap: 4px; text-align: left; }
+.pack .amount { font-weight: 600; }
+.pack .price { color: var(--muted); font-size: 14px; }
+button.badge { padding: 2px 8px; cursor: pointer; }
+
 .filters { display: grid; grid-template-columns: 1fr 2fr; gap: 12px; margin-bottom: 8px; }
 .filters label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--muted); }
 
