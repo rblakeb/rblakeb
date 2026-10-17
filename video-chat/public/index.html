@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Video Chat</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Video Chat</div>
+    <div class="account" id="account"></div>
+  </header>
+
+  <!-- First visit: pick a display name -->
+  <section id="welcome" class="panel" hidden>
+    <h1>Find people who want the same thing you do</h1>
+    <p class="muted">Pick what you're here for and we'll only match you with people here for the same thing.</p>
+    <form id="welcome-form" class="row">
+      <input id="display-name" maxlength="32" placeholder="Display name" required />
+      <button type="submit">Continue</button>
+    </form>
+    <p class="fineprint">By continuing you confirm you are 18 or older and agree to the terms of use.</p>
+  </section>
+
+  <!-- Lobby: choose intent and filters -->
+  <section id="lobby" class="panel" hidden>
+    <h2>What are you here for?</h2>
+    <div id="intents" class="intents"></div>
+
+    <div class="filters">
+      <label>Language
+        <select id="language">
+          <option value="">Any</option>
+          <option value="en">English</option>
+          <option value="es">Spanish</option>
+          <option value="fr">French</option>
+          <option value="de">German</option>
+          <option value="pt">Portuguese</option>
+          <option value="it">Italian</option>
+          <option value="ja">Japanese</option>
+        </select>
+      </label>
+      <label>Interests
+        <input id="tags" placeholder="e.g. techno, guitar, fortnite" />
+      </label>
+    </div>
+    <p class="muted small">If nobody matches your language within 10 seconds, we'll widen the search.</p>
+    <button id="start" class="primary" disabled>Start</button>
+    <p id="lobby-status" class="status"></p>
+  </section>
+
+  <!-- Call -->
+  <section id="call" hidden>
+    <div class="stage">
+      <div class="remote-wrap">
+        <video id="remote" autoplay playsinline></video>
+        <div id="remote-overlay" class="overlay">Looking for someone…</div>
+        <div id="blur-notice" class="blur-notice" hidden>Hidden: possible nudity in a non-adult room</div>
+        <div id="partner-info" class="partner-info"></div>
+      </div>
+      <video id="local" autoplay playsinline muted></video>
+    </div>
+    <div class="controls">
+      <button id="next" class="primary">Next</button>
+      <button id="report" class="danger">Report</button>
+      <button id="stop">Stop</button>
+    </div>
+    <div class="chat">
+      <div id="messages" class="messages"></div>
+      <form id="chat-form" class="row">
+        <input id="chat-input" maxlength="500" placeholder="Type a message" autocomplete="off" />
+        <button type="submit">Send</button>
+      </form>
+    </div>
+  </section>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mock Age Verification</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <section class="panel">
+    <h1>Mock age verification (dev only)</h1>
+    <p class="muted">In production this is the vendor's hosted page: ID photo, live selfie, face match. Pick the result the vendor would report.</p>
+    <p><label>Outcome
+      <select id="outcome">
+        <option value="adult">Approved, 18+</option>
+        <option value="minor">Approved, under 18</option>
+        <option value="rejected">Rejected (fake or mismatched ID)</option>
+      </select></label></p>
+    <p><label>Sex on ID
+      <select id="sex"><option>M</option><option>F</option><option>X</option></select></label></p>
+    <button id="submit" class="primary">Send result</button>
+  </section>
+  <script>
+    const params = new URLSearchParams(location.search);
+    document.getElementById("submit").onclick = async () => {
+      await fetch("/dev/api/verification-result", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          userId: params.get("user"),
+          reference: params.get("ref"),
+          outcome: document.getElementById("outcome").value,
+          sex: document.getElementById("sex").value,
+        }),
+      });
+      location.href = params.get("return") || "/";
+    };
+  </script>
+</body>
+</html>
