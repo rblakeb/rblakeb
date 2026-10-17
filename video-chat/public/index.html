@@ -2,15 +2,35 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Video Chat</title>
+  <meta name="theme-color" content="#0f1115" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Video Chat" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
   <header class="topbar">
     <div class="brand">Video Chat</div>
-    <div class="account" id="account"></div>
+    <div class="topbar-right">
+      <button type="button" id="install" class="install" hidden>Install app</button>
+      <div class="account" id="account"></div>
+    </div>
   </header>
+
+  <div id="ios-install" class="ios-install" hidden>
+    <span>Install this app: tap <strong>Share</strong>, then <strong>Add to Home Screen</strong>.</span>
+    <button type="button" id="ios-install-close" aria-label="Dismiss">✕</button>
+  </div>
+
+  <section id="offline" class="panel" hidden>
+    <h2>You're offline</h2>
+    <p class="muted">Video chat needs an internet connection. This page will reload when you're back online.</p>
+  </section>
 
   <!-- First visit: pick a display name -->
   <section id="welcome" class="panel" hidden>

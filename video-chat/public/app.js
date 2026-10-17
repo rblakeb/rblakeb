@@ -50,7 +50,7 @@ function loadToken() {
 // ---------- Views ----------
 
 function show(view) {
-  for (const id of ["welcome", "lobby", "call"]) $(id).hidden = id !== view;
+  for (const id of ["offline", "welcome", "lobby", "call"]) $(id).hidden = id !== view;
 }
 
 function renderAccount() {
@@ -458,4 +458,50 @@ function formatTime(ms) {
   return ms ? new Date(ms).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" }) : "";
 }
 
-init();
+// ---------- Install as an app ----------
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch((err) => console.warn("Service worker failed:", err));
+}
+
+const isStandalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+let installPrompt = null;
+
+// Chrome, Edge and Android: the browser hands us a prompt we can trigger from a button.
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  installPrompt = e;
+  $("install").hidden = false;
+});
+
+$("install").onclick = async () => {
+  if (!installPrompt) return;
+  installPrompt.prompt();
+  await installPrompt.userChoice;
+  installPrompt = null;
+  $("install").hidden = true;
+};
+
+// iOS Safari has no install prompt, so explain the Share menu once.
+function maybeShowIosHint() {
+  const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  let dismissed = false;
+  try {
+    dismissed = localStorage.getItem("iosInstallDismissed") === "1";
+  } catch {}
+  if (isIos && !isStandalone && !dismissed) $("ios-install").hidden = false;
+}
+
+$("ios-install-close").onclick = () => {
+  $("ios-install").hidden = true;
+  try {
+    localStorage.setItem("iosInstallDismissed", "1");
+  } catch {}
+};
+
+window.addEventListener("online", () => {
+  if (!$("offline").hidden) location.reload();
+});
+
+maybeShowIosHint();
+init().catch(() => show("offline"));

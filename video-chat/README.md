@@ -30,6 +30,15 @@ choose the outcome. Those routes are disabled when `NODE_ENV=production`.
 | Front end (vanilla JS + WebRTC) | `public/app.js` |
 | On-device nudity blur for non-adult rooms (NSFWJS) | `public/moderation.js` |
 
+### Mobile app (PWA)
+
+The site installs to the home screen as an app: `public/manifest.webmanifest`, icons in
+`public/icons/`, and `public/sw.js`, which caches the app shell (never API calls,
+signaling, payments or verification). Chrome and Android show an "Install app" button;
+iOS Safari shows a one-time hint to use Share → Add to Home Screen. Bump `CACHE` in
+`sw.js` when changing which files are cached. App stores don't allow adult content, so
+this is the mobile route. Installing requires HTTPS (or localhost).
+
 ### Adult access rules
 
 - Every user needs `verifiedAdult = true`, set only by the verification vendor's result.
