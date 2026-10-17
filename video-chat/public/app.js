@@ -186,6 +186,9 @@ async function refreshAccount() {
 
 async function init() {
   state.config = await api("/api/config");
+  // Landing pages link to /?intent=music etc. to open with that room selected.
+  const requested = new URLSearchParams(location.search).get("intent");
+  if (state.config.intents.some((i) => i.id === requested)) state.selectedIntent = requested;
   const token = loadToken();
   if (token) {
     state.token = token;

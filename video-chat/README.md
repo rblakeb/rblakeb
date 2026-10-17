@@ -45,6 +45,16 @@ choose the outcome. Those routes are disabled when `NODE_ENV=production`.
 | Front end (vanilla JS + WebRTC) | `public/app.js` |
 | On-device nudity blur for non-adult rooms (NSFWJS) | `public/moderation.js` |
 
+### SEO
+
+`server/src/seo.ts` serves one landing page per room (`/random-video-chat`,
+`/music-video-chat`, `/gaming-video-chat`, `/language-exchange-video-chat`,
+`/adult-video-chat`), each with its own title, description, canonical link, social
+preview tags and FAQ structured data, plus `robots.txt` and `sitemap.xml`. Their "Start"
+buttons open the app with that room selected (`/?intent=music`). The adult page is marked
+`rating=adult` so search engines can filter it without flagging the rest of the site.
+Set `SITE_URL` and `SITE_NAME` in production; edit page copy in `LANDING_PAGES`.
+
 ### Mobile app (PWA)
 
 The site installs to the home screen as an app: `public/manifest.webmanifest`, icons in

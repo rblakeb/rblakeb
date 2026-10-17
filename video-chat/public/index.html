@@ -3,7 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Video Chat</title>
+  <title>%SITE_NAME%: Random Video Chat Matched by Why You're Here</title>
+  <meta name="description" content="Random video chat that matches you with people who want the same thing: just chatting, music and DJing, gaming, language exchange, or a verified 18+ room." />
+  <link rel="canonical" href="%SITE_URL%/" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="%SITE_NAME%" />
+  <meta property="og:title" content="Random video chat, matched by why you're here" />
+  <meta property="og:description" content="Pick chat, music, gaming or language exchange and only meet people who picked the same." />
+  <meta property="og:url" content="%SITE_URL%/" />
+  <meta property="og:image" content="%SITE_URL%/og-image.png" />
+  <meta name="twitter:card" content="summary_large_image" />
   <meta name="theme-color" content="#0f1115" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -15,7 +24,7 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Video Chat</div>
+    <a class="brand" href="/">%SITE_NAME%</a>
     <div class="topbar-right">
       <button type="button" id="install" class="install" hidden>Install app</button>
       <div class="account" id="account"></div>
@@ -104,6 +113,8 @@
       </form>
     </div>
   </section>
+
+  %FOOTER%
 
   <script type="module" src="/app.js"></script>
 </body>

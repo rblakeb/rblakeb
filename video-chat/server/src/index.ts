@@ -17,6 +17,7 @@ import {
   windDown,
 } from "./billing.ts";
 import { openDb, setDb } from "./db.ts";
+import { registerSeo } from "./seo.ts";
 import { SignalingHub } from "./signaling.ts";
 import { createUser, loadUser, loadUserByToken, publicProfile, touch, type User } from "./users.ts";
 import { applyVerificationResult, mockVerificationProvider } from "./verification.ts";
@@ -185,6 +186,7 @@ if (!IS_PROD) {
   app.use("/dev", (_req, res) => res.status(404).end());
 }
 
+registerSeo(app, publicDir, PORT);
 app.use(express.static(publicDir));
 
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
