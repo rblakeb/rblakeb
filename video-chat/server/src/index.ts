@@ -5,9 +5,19 @@ import express, { type Request, type Response, type NextFunction } from "express
 import { WebSocketServer } from "ws";
 import { ADULT_PRICING, CREDIT_PACKS, INTENTS, getCreditPack, type Sex } from "./config.ts";
 import { adultIsFreeFor, checkAccess, hasActivePass } from "./access.ts";
-import { grantCredits, mockPaymentProvider, spendOnDayPass } from "./billing.ts";
+import {
+  areSalesClosed,
+  consoleNotifier,
+  grantCredits,
+  mockPaymentProvider,
+  refundableCents,
+  refundUnusedCredits,
+  runInactivitySweep,
+  spendOnDayPass,
+  windDown,
+} from "./billing.ts";
 import { SignalingHub } from "./signaling.ts";
-import { createUser, getUserByToken, publicProfile, type User } from "./users.ts";
+import { createUser, getUserByToken, publicProfile, touch, type User } from "./users.ts";
 import { applyVerificationResult, mockVerificationProvider } from "./verification.ts";
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -17,6 +27,7 @@ const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 // Replace the mocks with real vendor adapters before launch.
 const verificationProvider = mockVerificationProvider;
 const paymentProvider = mockPaymentProvider;
+const notifier = consoleNotifier;
 
 const app = express();
 app.use(express.json({ limit: "16kb" }));
@@ -28,6 +39,7 @@ function requireUser(req: Request, res: Response, next: NextFunction) {
   const user = getUserByToken(token);
   if (!user) return res.status(401).json({ error: "unauthorized" });
   if (user.banned) return res.status(403).json({ error: "banned" });
+  touch(user);
   (req as AuthedRequest).user = user;
   next();
 }
@@ -39,7 +51,9 @@ function accountState(user: User) {
       verified: user.verifiedAdult,
       free: user.verifiedAdult && adultIsFreeFor(user),
       passActive: hasActivePass(user),
+      refundableCents: refundableCents(user),
     },
+    salesClosed: areSalesClosed(),
     access: Object.fromEntries(INTENTS.map((i) => [i.id, checkAccess(user, i)])),
   };
 }
@@ -75,6 +89,7 @@ app.post("/api/billing/checkout", requireUser, async (req, res) => {
   // Credits only buy adult access, so don't sell them to people who can't use them.
   if (!user.verifiedAdult) return res.status(400).json({ error: "not_verified" });
   if (adultIsFreeFor(user)) return res.status(400).json({ error: "already_free" });
+  if (areSalesClosed()) return res.status(400).json({ error: "sales_closed" });
   const pack = getCreditPack(String(req.body?.packId));
   if (!pack) return res.status(400).json({ error: "unknown_pack" });
   const { url } = await paymentProvider.createCreditCheckout(user, pack, "/");
@@ -88,6 +103,20 @@ app.post("/api/adult/unlock", requireUser, (req, res) => {
   const result = spendOnDayPass(user);
   if (result !== "ok") return res.status(402).json({ error: result });
   res.json(accountState(user));
+});
+
+app.post("/api/billing/refund", requireUser, async (req, res) => {
+  const user = (req as AuthedRequest).user;
+  const summary = await refundUnusedCredits(user, paymentProvider, "requested");
+  res.json({ ...summary, ...accountState(user) });
+});
+
+// Shutting the site down: closes credit sales and refunds every unused credit.
+// Disabled unless ADMIN_TOKEN is set.
+app.post("/admin/wind-down", async (req, res) => {
+  const adminToken = process.env.ADMIN_TOKEN;
+  if (!adminToken || req.header("x-admin-token") !== adminToken) return res.status(404).end();
+  res.json(await windDown(paymentProvider, notifier));
 });
 
 // Real vendor and payment webhooks go here. Each must check the vendor's
@@ -111,7 +140,7 @@ if (!IS_PROD) {
   app.post("/dev/api/payment-success", (req, res) => {
     const pack = getCreditPack(String(req.body?.packId));
     if (!pack) return res.status(400).json({ error: "unknown_pack" });
-    const user = grantCredits(String(req.body?.userId), pack.credits, String(req.body?.reference));
+    const user = grantCredits(String(req.body?.userId), pack, String(req.body?.reference));
     if (!user) return res.status(404).json({ error: "unknown_user" });
     res.json({ ok: true });
   });
@@ -120,6 +149,10 @@ if (!IS_PROD) {
 }
 
 app.use(express.static(publicDir));
+
+setInterval(() => {
+  runInactivitySweep(paymentProvider, notifier).catch((err) => console.error("Inactivity sweep failed:", err));
+}, 3_600_000).unref();
 
 const server = http.createServer(app);
 const hub = new SignalingHub();

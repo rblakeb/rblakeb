@@ -2,7 +2,7 @@ import type { WebSocket } from "ws";
 import { getIntent, type IntentId } from "./config.ts";
 import { checkAccess } from "./access.ts";
 import { Matchmaker, type Match } from "./matchmaker.ts";
-import { getUserById, getUserByToken, type User } from "./users.ts";
+import { getUserById, getUserByToken, touch, type User } from "./users.ts";
 
 const REPORTS_BEFORE_BAN = 3;
 
@@ -52,6 +52,7 @@ export class SignalingHub {
           socket.close();
           return;
         }
+        touch(user);
         // One live connection per account.
         this.sessions.get(user.id)?.socket.close();
         session = { user, socket, intent: null, partnerId: null };

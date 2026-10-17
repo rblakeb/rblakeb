@@ -11,9 +11,26 @@ export interface User {
   verifiedSex: Sex | null;
   verificationRef: string | null;
   adultPassExpiresAt: number | null;
-  credits: number;
+  creditLots: CreditLot[];
+  // From the payment processor's checkout; used for refund and inactivity notices.
+  email: string | null;
+  lastActiveAt: number;
+  inactivityReminderSentAt: number | null;
   banned: boolean;
   reportCount: number;
+}
+
+// Credits from one purchase. Tracked per purchase so a refund goes back to the
+// charge it came from, at the price actually paid.
+export interface CreditLot {
+  paymentRef: string;
+  purchasedAt: number;
+  packCredits: number;
+  packCents: number;
+  remaining: number;
+  // A refund was attempted and failed (expired card, charge too old to refund).
+  // The credits stay usable; someone has to refund this by another method.
+  refundFailed: boolean;
 }
 
 // In-memory store for the MVP. Swap for Postgres before launch.
@@ -30,13 +47,28 @@ export function createUser(displayName: string): User {
     verifiedSex: null,
     verificationRef: null,
     adultPassExpiresAt: null,
-    credits: 0,
+    creditLots: [],
+    email: null,
+    lastActiveAt: Date.now(),
+    inactivityReminderSentAt: null,
     banned: false,
     reportCount: 0,
   };
   byId.set(user.id, user);
   byToken.set(user.token, user);
   return user;
+}
+
+export function allUsers(): IterableIterator<User> {
+  return byId.values();
+}
+
+export function creditBalance(user: User): number {
+  return user.creditLots.reduce((sum, lot) => sum + lot.remaining, 0);
+}
+
+export function touch(user: User, now = Date.now()): void {
+  user.lastActiveAt = now;
 }
 
 export function getUserById(id: string): User | undefined {
@@ -53,6 +85,6 @@ export function publicProfile(user: User) {
     displayName: user.displayName,
     verifiedAdult: user.verifiedAdult,
     adultPassExpiresAt: user.adultPassExpiresAt,
-    credits: user.credits,
+    credits: creditBalance(user),
   };
 }

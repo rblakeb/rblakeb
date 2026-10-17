@@ -39,6 +39,21 @@ choose the outcome. Those routes are disabled when `NODE_ENV=production`.
 - Credits are sold in packs (5 for $5, 12 for $10, 30 for $20; edit `CREDIT_PACKS` in
   `server/src/config.ts`) and only to verified adults who'd have to pay.
 - Each payment reference is credited once, so a retried processor webhook can't double-credit.
+
+### Refunds
+
+Settings are `REFUND_POLICY` in `server/src/config.ts`; logic is in `server/src/billing.ts`.
+
+- **Credits never expire.** Users can refund unused credits at any time from the credits panel.
+- Credits are tracked per purchase and spent oldest first. A refund goes back to the charge
+  it came from, at the price actually paid (rounded in the customer's favor).
+- **Inactive accounts:** a reminder at 150 days without logging in, then an automatic refund
+  at 180 days. These need to fit inside the processor's refund window, so confirm that first.
+- **Failed refunds** (expired card, charge too old) leave the credits on the account, still
+  usable, flagged for a manual refund by another method. Every attempt is in `refundLog`.
+- **Shutting down:** `POST /admin/wind-down` with header `x-admin-token: $ADMIN_TOKEN` stops
+  credit sales and refunds every unused credit. It returns the list of users whose refunds
+  failed so they can be paid another way. The route doesn't exist unless `ADMIN_TOKEN` is set.
 - Access is checked when joining the queue, again at match time, and every second during
   a call, so an expired pass ends the call.
 - 3 reports bans an account (MVP rule).
@@ -50,10 +65,13 @@ choose the outcome. Those routes are disabled when `NODE_ENV=production`.
       signature before calling `applyVerificationResult`.
 - [ ] **Payments**: replace `mockPaymentProvider` with an adult-friendly processor
       (CCBill, Segpay, Epoch) and add its webhook calling `grantCredits`.
-- [ ] **Credit rules**: decide whether credits expire and whether unused ones are
-      refundable, and put it in the terms. Some states regulate this.
-- [ ] **Database**: users live in memory (`server/src/users.ts`) and vanish on restart.
-      Move them to Postgres.
+- [ ] **Refund terms**: put the refund policy above in the terms of use, and set the
+      inactivity timings to fit the processor's refund window.
+- [ ] **Email**: the inactivity reminder and refund notices only log to the console. Hook
+      `consoleNotifier` up to an email service; addresses come from the payment webhook.
+- [ ] **Unclaimed property**: have an accountant handle balances whose card refund failed.
+- [ ] **Database**: users, credits, the refund log and the "sales closed" flag live in
+      memory and vanish on restart. Move them to Postgres.
 - [ ] **Server-side moderation**: on-device blurring can be bypassed by a modified client.
       Add server frame sampling (Hive, Sightengine, Rekognition), which needs media
       routed through an SFU like LiveKit instead of peer-to-peer.

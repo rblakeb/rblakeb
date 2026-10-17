@@ -42,6 +42,15 @@ export const CREDIT_PACKS: CreditPack[] = [
   { id: "pack30", credits: 30, priceCents: 2000 },
 ];
 
+// Credits never expire. Unused credits are refundable on request at any time.
+// Inactive accounts are refunded automatically while the original charge is
+// still young enough for the processor to refund it to the card. Confirm the
+// processor's refund window and set these to fit inside it.
+export const REFUND_POLICY = {
+  inactivityReminderDays: 150,
+  inactivityRefundDays: 180,
+};
+
 export function getCreditPack(id: string): CreditPack | undefined {
   return CREDIT_PACKS.find((p) => p.id === id);
 }

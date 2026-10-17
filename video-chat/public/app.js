@@ -77,6 +77,12 @@ function showPacks() {
   if ($("lobby").hidden) return;
   const list = $("pack-list");
   list.innerHTML = "";
+  renderRefund();
+  if (state.account.salesClosed) {
+    list.innerHTML = `<p class="muted">Credit sales are closed.</p>`;
+    $("packs").hidden = false;
+    return;
+  }
   for (const pack of state.config.pricing.packs) {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -95,6 +101,30 @@ function showPacks() {
   $("packs").hidden = false;
   $("packs").scrollIntoView({ behavior: "smooth" });
 }
+
+function renderRefund() {
+  const credits = state.account.user.credits;
+  $("refund").hidden = credits === 0;
+  $("refund-button").textContent = `Refund my ${creditLabel(credits)} ($${(state.account.adult.refundableCents / 100).toFixed(2)})`;
+}
+
+$("refund-button").onclick = async () => {
+  const credits = state.account.user.credits;
+  if (!confirm(`Refund your ${creditLabel(credits)} to the card you paid with?`)) return;
+  try {
+    const result = await api("/api/billing/refund", { method: "POST" });
+    state.account = result;
+    renderAccount();
+    renderIntents();
+    updateStartButton();
+    renderRefund();
+    $("lobby-status").textContent = result.failedCents > 0
+      ? `We couldn't refund $${(result.failedCents / 100).toFixed(2)} to your card. Your credits are still on your account and contact support and we'll refund them another way.`
+      : `Refunded $${(result.refundedCents / 100).toFixed(2)} to your card.`;
+  } catch (err) {
+    $("lobby-status").textContent = `Something went wrong: ${err.message}`;
+  }
+};
 
 function adultStatus() {
   const access = state.account?.access?.adult;
