@@ -29,6 +29,31 @@ need checking by hand), `reports`, and `settings` (holds `sales_closed`).
 Users with an open WebSocket are cached in memory for signaling. That assumes a single
 server process; running several needs a shared channel (e.g. Postgres LISTEN/NOTIFY or Redis).
 
+The production database is the Supabase project `video-chat` (ref `ovvsbsuwvvtfyynbhfgn`,
+us-east-1), with migrations 001 and 002 already applied. Use its **session pooler**
+connection string (Project Settings → Database → Connect) as `DATABASE_URL`. Migration 002
+turns on row level security with no policies, which blocks Supabase's public REST API from
+these tables; the server connects as the database owner and isn't affected. Keep it that way
+for any new table.
+
+### Calls and the media server
+
+With `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` set, every match gets its own
+LiveKit room (`server/src/media.ts`) and both browsers send their audio and video through it
+instead of directly to each other. That's what makes calls monitorable and lets the server
+cut them: `POST /admin/end-call` with `{"userId": "...", "ban": true|false}` and header
+`x-admin-token` closes the room for both sides at once. Rooms close themselves when a call
+ends. These settings are required in production; without them (dev only) calls are
+peer-to-peer. For local testing:
+
+```bash
+docker run --rm --network host livekit/livekit-server --dev --bind 0.0.0.0
+LIVEKIT_URL=ws://localhost:7880 LIVEKIT_API_KEY=devkey LIVEKIT_API_SECRET=secret npm run dev
+```
+
+In production use LiveKit Cloud or a self-hosted LiveKit with TLS (`wss://`); it includes
+TURN, so calls connect on mobile networks without a separate TURN server.
+
 In dev mode, age verification and payments go to mock pages (`public/dev/`) where you
 choose the outcome. Those routes are disabled when `NODE_ENV=production`.
 
@@ -97,20 +122,23 @@ Settings are `REFUND_POLICY` in `server/src/config.ts`; logic is in `server/src/
 - [ ] **Verification vendor**: replace `mockVerificationProvider` with a real adapter
       (Yoti, Veriff, Persona, VerifyMy...) and add its webhook. Check the vendor's
       signature before calling `applyVerificationResult`.
-- [ ] **Payments**: replace `mockPaymentProvider` with an adult-friendly processor
-      (CCBill, Segpay, Epoch) and add its webhook calling `grantCredits`.
+- [ ] **Payments (Segpay)**: replace `mockPaymentProvider` with a Segpay adapter (hosted
+      pay page with one price point per pack, postbacks calling `grantCredits` — they aren't
+      signed, so check Segpay's IP ranges and re-query the transaction — and the Gateway
+      API's partial credit for refunds).
 - [ ] **Refund terms**: put the refund policy above in the terms of use, and set the
       inactivity timings to fit the processor's refund window.
 - [ ] **Email**: the inactivity reminder and refund notices only log to the console. Hook
       `consoleNotifier` up to an email service; addresses come from the payment webhook.
 - [ ] **Unclaimed property**: have an accountant handle balances whose card refund failed.
-- [ ] **Production database**: create the Supabase project and set `DATABASE_URL`.
+- [ ] **Production database**: set `DATABASE_URL` to the Supabase session pooler string.
+- [ ] **Media server**: LiveKit Cloud project (or self-hosted) and the `LIVEKIT_*` settings.
 - [ ] **Server-side moderation**: on-device blurring can be bypassed by a modified client.
-      Add server frame sampling (Hive, Sightengine, Rekognition), which needs media
-      routed through an SFU like LiveKit instead of peer-to-peer.
+      Calls now go through LiveKit, so add frame sampling there (a LiveKit agent or egress
+      snapshots sent to Hive, Sightengine or Rekognition) that calls the end-call switch.
+- [ ] **Moderation dashboard**: a screen for reviewing reports and using `/admin/end-call`.
 - [ ] **CSAM hash matching and NCMEC reporting** (PhotoDNA or Thorn Safer).
-- [ ] **TURN server**: set `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` so calls
-      connect across strict NATs and mobile networks.
+- [ ] **TURN server** (peer-to-peer dev mode only; LiveKit includes its own).
 - [ ] **Periodic face re-checks** in adult calls against the verified face.
 - [ ] **Legal review**: age verification laws where your users are, 18 U.S.C. § 2257,
       and whether sex-based pricing is allowed in your markets (e.g. California's Unruh Act).

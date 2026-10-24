@@ -10,6 +10,10 @@ const state = {
   activeIntent: null,
   ws: null,
   pc: null,
+  // LiveKit room when calls go through the media server.
+  room: null,
+  // Bumped whenever a call ends, so a slow connect for an old call can tell it's stale.
+  callSeq: 0,
   localStream: null,
   pendingCandidates: [],
   stopModeration: null,
@@ -303,12 +307,17 @@ async function onSocketMessage(msg) {
         msg.reason === "payment_required" ? "Your day pass has expired." : msg.reason === "not_verified" ? "Age verification is required for this room." : "You can't join this room.";
       break;
     case "matched":
-      await startPeer(msg.initiator);
+      if (msg.media?.kind === "livekit") await startRoom(msg.media);
+      else await startPeer(msg.initiator);
       $("partner-info").textContent = msg.partner.displayName + (msg.sharedTags.length ? ` · ${msg.sharedTags.join(", ")}` : "");
       addMessage("sys", `Connected with ${msg.partner.displayName}`);
       break;
     case "signal":
       await onSignal(msg.data);
+      break;
+    case "ended_by_moderator":
+      addMessage("sys", "This call was ended by a moderator. Finding someone new…");
+      joinQueue();
       break;
     case "partner_left":
       addMessage("sys", "They left. Finding someone new…");
@@ -363,6 +372,33 @@ async function startPeer(initiator) {
   }
 }
 
+// Calls through the media server: both sides publish to a LiveKit room the
+// server created, and the server can close the room to cut the call.
+async function startRoom({ url, token }) {
+  closePeer();
+  const seq = state.callSeq;
+  const { Room, RoomEvent } = await import("/vendor/livekit-client.esm.mjs");
+  // Keep our camera running between calls instead of stopping it on disconnect.
+  const room = new Room({ adaptiveStream: true, stopLocalTrackOnUnpublish: false });
+  const remoteStream = new MediaStream();
+  room.on(RoomEvent.TrackSubscribed, (track) => {
+    remoteStream.addTrack(track.mediaStreamTrack);
+    $("remote").srcObject = remoteStream;
+    setOverlay(null);
+    startModeration();
+  });
+  try {
+    await room.connect(url, token);
+    if (seq !== state.callSeq) return room.disconnect(false);
+    state.room = room;
+    for (const track of state.localStream.getTracks()) await room.localParticipant.publishTrack(track);
+  } catch (err) {
+    console.warn("Couldn't join call:", err);
+    room.disconnect(false);
+    if (seq === state.callSeq) joinQueue();
+  }
+}
+
 async function onSignal(data) {
   const pc = state.pc;
   if (!pc) return;
@@ -385,6 +421,10 @@ function closePeer() {
   setBlurred(false);
   state.pc?.close();
   state.pc = null;
+  // false: leave our camera and mic running for the next call.
+  state.room?.disconnect(false);
+  state.room = null;
+  state.callSeq++;
   state.pendingCandidates = [];
   $("remote").srcObject = null;
   $("partner-info").textContent = "";
@@ -411,7 +451,7 @@ $("next").onclick = () => {
 };
 
 $("report").onclick = () => {
-  if (!state.pc) return;
+  if (!state.pc && !state.room) return;
   const reason = prompt("What happened? (optional)") ?? "";
   wsSend({ type: "report", reason });
   addMessage("sys", "Reported. Thanks for keeping things safe.");
@@ -432,7 +472,7 @@ $("stop").onclick = () => {
 $("chat-form").onsubmit = (e) => {
   e.preventDefault();
   const text = $("chat-input").value.trim();
-  if (!text || !state.pc) return;
+  if (!text || !(state.pc || state.room)) return;
   wsSend({ type: "chat", text });
   addMessage("me", text);
   $("chat-input").value = "";

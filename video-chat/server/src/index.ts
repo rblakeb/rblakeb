@@ -17,9 +17,10 @@ import {
   windDown,
 } from "./billing.ts";
 import { openDb, setDb } from "./db.ts";
+import { liveKitFromEnv } from "./media.ts";
 import { registerSeo } from "./seo.ts";
 import { SignalingHub } from "./signaling.ts";
-import { createUser, loadUser, loadUserByToken, publicProfile, touch, type User } from "./users.ts";
+import { createUser, loadUser, loadUserByToken, publicProfile, setBanned, touch, type User } from "./users.ts";
 import { applyVerificationResult, mockVerificationProvider } from "./verification.ts";
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -28,6 +29,9 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.
 const publicDir = path.join(rootDir, "public");
 
 if (IS_PROD && !process.env.DATABASE_URL) throw new Error("DATABASE_URL is required in production");
+// Calls must go through a media server in production so they can be monitored and cut.
+const media = liveKitFromEnv();
+if (IS_PROD && !media) throw new Error("LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET are required in production");
 // Without DATABASE_URL, an embedded Postgres keeps its data in .data/ between restarts.
 setDb(await openDb({ url: process.env.DATABASE_URL, dataDir: path.join(rootDir, ".data/pglite") }));
 
@@ -36,6 +40,7 @@ const verificationProvider = mockVerificationProvider;
 const paymentProvider = mockPaymentProvider;
 const notifier = consoleNotifier;
 
+const hub = new SignalingHub(media);
 const app = express();
 app.use(express.json({ limit: "16kb" }));
 
@@ -151,6 +156,21 @@ app.post(
   }),
 );
 
+// Moderation kill switch: ends a user's call immediately for both sides.
+// With "ban": true also bans the account and disconnects them.
+app.post(
+  "/admin/end-call",
+  route(async (req, res) => {
+    const adminToken = process.env.ADMIN_TOKEN;
+    if (!adminToken || req.header("x-admin-token") !== adminToken) return res.status(404).end();
+    const userId = String(req.body?.userId ?? "");
+    const ban = req.body?.ban === true;
+    if (ban) await setBanned(userId);
+    const ended = hub.endCallFor(userId, { disconnect: ban });
+    res.json({ ended, banned: ban });
+  }),
+);
+
 // Real vendor and payment webhooks go here. Each must check the vendor's
 // signature before calling applyVerificationResult / grantCredits.
 
@@ -188,6 +208,10 @@ if (!IS_PROD) {
 
 registerSeo(app, publicDir, PORT);
 app.use(express.static(publicDir));
+// The LiveKit browser client, served from our own origin rather than a CDN.
+app.get("/vendor/livekit-client.esm.mjs", (_req, res) =>
+  res.sendFile(path.join(rootDir, "node_modules/livekit-client/dist/livekit-client.esm.mjs")),
+);
 
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   console.error(err);
@@ -199,10 +223,10 @@ setInterval(() => {
 }, 3_600_000).unref();
 
 const server = http.createServer(app);
-const hub = new SignalingHub();
 const wss = new WebSocketServer({ server, path: "/ws", maxPayload: 64 * 1024 });
 wss.on("connection", (socket) => hub.handleConnection(socket));
 
 server.listen(PORT, () => {
   console.log(`Listening on http://localhost:${PORT}${IS_PROD ? "" : " (dev mode: mock verification and payments enabled)"}`);
+  console.log(media ? `Calls routed through LiveKit at ${process.env.LIVEKIT_URL}` : "Calls are peer-to-peer (set LIVEKIT_* to route through a media server)");
 });

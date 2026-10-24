@@ -158,6 +158,11 @@ export async function recordReport(
   return { banned: row?.banned ?? false };
 }
 
+export async function setBanned(id: string, db: Db = getDb()): Promise<void> {
+  await db.query("update users set banned = true where id = $1", [id]);
+  await loadUser(id, db);
+}
+
 export function creditBalance(user: User): number {
   return user.creditLots.reduce((sum, lot) => sum + lot.remaining, 0);
 }
