@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Express } from "express";
+import { marked } from "marked";
 import type { IntentId } from "./config.ts";
 
 // Set SITE_URL (e.g. https://example.com) in production so canonical links,
@@ -168,10 +170,48 @@ function renderLanding(page: LandingPage, siteUrl: string): string {
 `;
 }
 
+// Terms and policies, written in Markdown in legal/ so counsel can edit them directly.
+const LEGAL_PAGES = [
+  { slug: "terms", file: "terms.md", title: "Terms of Use" },
+  { slug: "privacy", file: "privacy.md", title: "Privacy Policy" },
+  { slug: "content-policy", file: "content-policy.md", title: "Content & Moderation Policy" },
+];
+
+// Kept out of search results until counsel removes this notice from the file.
+const DRAFT_MARKER = "DRAFT for attorney review";
+
 function siteFooter(pages: LandingPage[]): string {
   return `<footer class="site-footer">
     <nav>${pages.map((p) => `<a href="/${p.slug}">${escapeHtml(p.navLabel)}</a>`).join("")}</nav>
+    <nav class="legal">${LEGAL_PAGES.map((p) => `<a href="/${p.slug}">${p.title}</a>`).join("")}</nav>
   </footer>`;
+}
+
+function renderLegal(title: string, markdown: string, slug: string, siteUrl: string): string {
+  const draft = markdown.includes(DRAFT_MARKER);
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>${title} | ${escapeHtml(SITE_NAME)}</title>
+  <link rel="canonical" href="${siteUrl}/${slug}" />
+  ${draft ? '<meta name="robots" content="noindex" />' : ""}
+  <meta name="theme-color" content="#0f1115" />
+  <link rel="icon" href="/icons/icon-192.png" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">${escapeHtml(SITE_NAME)}</a>
+  </header>
+  <main class="panel landing legal-doc">
+    ${marked.parse(markdown.replaceAll("[SITE NAME]", SITE_NAME), { async: false })}
+  </main>
+  ${siteFooter(LANDING_PAGES)}
+</body>
+</html>
+`;
 }
 
 export function registerSeo(app: Express, publicDir: string, port: number): void {
@@ -179,6 +219,15 @@ export function registerSeo(app: Express, publicDir: string, port: number): void
 
   for (const page of LANDING_PAGES) {
     const html = renderLanding(page, siteUrl);
+    app.get(`/${page.slug}`, (_req, res) => res.type("html").send(html));
+  }
+
+  const legalDir = path.join(publicDir, "../legal");
+  const finalLegal: string[] = [];
+  for (const page of LEGAL_PAGES) {
+    const markdown = readFileSync(path.join(legalDir, page.file), "utf8");
+    if (!markdown.includes(DRAFT_MARKER)) finalLegal.push(`/${page.slug}`);
+    const html = renderLegal(page.title, markdown, page.slug, siteUrl);
     app.get(`/${page.slug}`, (_req, res) => res.type("html").send(html));
   }
 
@@ -200,7 +249,7 @@ export function registerSeo(app: Express, publicDir: string, port: number): void
   });
 
   app.get("/sitemap.xml", (_req, res) => {
-    const urls = ["", ...LANDING_PAGES.map((p) => `/${p.slug}`)];
+    const urls = ["", ...LANDING_PAGES.map((p) => `/${p.slug}`), ...finalLegal];
     res.type("application/xml").send(
       `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls
         .map((u) => `  <url><loc>${siteUrl}${u}</loc></url>`)

@@ -80,6 +80,14 @@ buttons open the app with that room selected (`/?intent=music`). The adult page 
 `rating=adult` so search engines can filter it without flagging the rest of the site.
 Set `SITE_URL` and `SITE_NAME` in production; edit page copy in `LANDING_PAGES`.
 
+### Legal pages
+
+`legal/terms.md`, `legal/privacy.md` and `legal/content-policy.md` are served at `/terms`,
+`/privacy` and `/content-policy` and linked from the footer and sign-up. They're drafts for
+counsel: while a file still contains "DRAFT for attorney review" its page is marked
+`noindex` and left out of the sitemap. Open questions for counsel are in
+`legal/NOTES-FOR-COUNSEL.md`. Pages are read at startup, so restart after editing.
+
 ### Mobile app (PWA)
 
 The site installs to the home screen as an app: `public/manifest.webmanifest`, icons in
@@ -126,8 +134,9 @@ Settings are `REFUND_POLICY` in `server/src/config.ts`; logic is in `server/src/
       pay page with one price point per pack, postbacks calling `grantCredits` — they aren't
       signed, so check Segpay's IP ranges and re-query the transaction — and the Gateway
       API's partial credit for refunds).
-- [ ] **Refund terms**: put the refund policy above in the terms of use, and set the
-      inactivity timings to fit the processor's refund window.
+- [ ] **Legal review**: counsel finalizes `legal/*.md` (fill the bracketed items, resolve
+      `legal/NOTES-FOR-COUNSEL.md`), and the inactivity timings are set to fit Segpay's
+      refund window.
 - [ ] **Email**: the inactivity reminder and refund notices only log to the console. Hook
       `consoleNotifier` up to an email service; addresses come from the payment webhook.
 - [ ] **Unclaimed property**: have an accountant handle balances whose card refund failed.

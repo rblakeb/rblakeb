@@ -75,6 +75,11 @@ a.cta {
 .site-footer { border-top: 1px solid var(--line); margin-top: 48px; padding: 20px 16px 32px; }
 .site-footer nav { max-width: 760px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 8px 20px; }
 .site-footer a { color: var(--muted); font-size: 14px; }
+.site-footer nav.legal { margin-top: 12px; }
+.site-footer nav.legal a { font-size: 13px; }
+.fineprint a { color: inherit; }
+.legal-doc blockquote { margin: 16px 0; padding: 10px 14px; border-left: 3px solid var(--adult); background: var(--panel); }
+.legal-doc li { margin: 4px 0; }
 #call:not([hidden]) ~ .site-footer { display: none; }
 .account { display: flex; gap: 8px; align-items: center; font-size: 14px; }
 .badge { padding: 2px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); }
