@@ -7,6 +7,7 @@ Gaming, Language Exchange, Adult 18+) and only get matched with people who picke
 
 ```bash
 npm install
+cp .env.example .env   # then put your keys in .env (it's git-ignored)
 npm run dev        # http://localhost:3000
 npm test           # matchmaking + access rules
 npm run typecheck
@@ -68,7 +69,7 @@ voice while an animated face (`public/avatar.js`) lip-syncs.
   Japanese) and **Jay**, a music buddy. Personas and shared rules are in
   `server/src/companion.ts`.
 - The brain is Claude (`claude-opus-5-5`, low effort for fast replies, streaming, with
-  server-side refusal fallback enabled). Set `ANTHROPIC_API_KEY`; without it, characters
+  server-side refusal fallback enabled). Put `ANTHROPIC_API_KEY` in `.env`; without it, characters
   answer in test mode with canned replies so the call loop can still be tried.
 - Every character says it's an AI if asked, the page shows a permanent "You're talking to an
   AI" badge, and the shared rules route self-harm talk to 988, for AI companion laws.
