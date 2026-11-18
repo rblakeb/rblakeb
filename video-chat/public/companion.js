@@ -1,6 +1,10 @@
 import { Avatar } from "./avatar.js";
+import { pickVoice } from "./voices.js";
 
 const $ = (id) => document.getElementById(id);
+
+// Which kind of voice fits each character's face.
+const VOICE_GENDER = { tutor: "female", music: "male" };
 
 // Browser speech codes for each language the companions support.
 const SPEECH_LANG = { es: "es-ES", fr: "fr-FR", de: "de-DE", it: "it-IT", pt: "pt-BR", ja: "ja-JP", en: "en-US" };
@@ -79,8 +83,11 @@ async function startCall(character) {
   state.character = character;
   state.voiceLang = started.voiceLang;
 
-  state.stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+  // The microphone track is only used for the level meter; speech recognition
+  // opens the mic itself. Nothing from the mic is sent to the server.
+  state.stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
   $("local").srcObject = state.stream;
+  startMicMeter(state.stream);
 
   $("picker").hidden = true;
   $("call").hidden = false;
@@ -96,6 +103,7 @@ async function startCall(character) {
 
 function hangUp() {
   state.listening = false;
+  stopMicMeter();
   state.recognition?.abort();
   speechSynthesis?.cancel();
   state.avatar?.stop();
@@ -131,7 +139,7 @@ async function sendTurn(text, { silentUser = false } = {}) {
   setStatus("Thinking…");
 
   const bubble = addMessage("them", "");
-  const speaker = new Speaker(state.voiceLang, state.avatar, () => {
+  const speaker = new Speaker(state.voiceLang, VOICE_GENDER[state.character], state.avatar, () => {
     setStatus(state.listening ? "Listening…" : "Your turn");
     state.busy = false;
     resumeRecognition();
@@ -170,14 +178,14 @@ async function sendTurn(text, { silentUser = false } = {}) {
 
 // Voices the reply sentence by sentence as it streams in, and drives the avatar's mouth.
 class Speaker {
-  constructor(lang, avatar, onDone) {
+  constructor(lang, gender, avatar, onDone) {
     this.lang = SPEECH_LANG[lang] ?? "en-US";
+    this.gender = gender;
     this.avatar = avatar;
     this.onDone = onDone;
     this.pending = 0;
     this.buffer = "";
     this.finished = false;
-    this.voice = pickVoice(this.lang);
   }
 
   add(text) {
@@ -212,13 +220,16 @@ class Speaker {
     // just mouths it for that long; with one, it's a backstop in case the
     // browser never reports the end of the utterance.
     const estimateMs = 600 + sentence.split(/\s+/).length * 330;
-    const canSpeak = "speechSynthesis" in window && this.voice;
+    // Picked per sentence because browsers load their voice list asynchronously.
+    const { voice, pitch } = "speechSynthesis" in window ? pickVoice(speechSynthesis.getVoices(), this.lang, this.gender) : {};
+    const canSpeak = !!voice;
     const safety = setTimeout(done, canSpeak ? estimateMs * 2 + 2000 : estimateMs);
     this.avatar.setSpeaking(true);
     setStatus("Speaking…");
     if (canSpeak) {
       const utterance = new SpeechSynthesisUtterance(sentence);
-      utterance.voice = this.voice;
+      utterance.voice = voice;
+      utterance.pitch = pitch;
       utterance.lang = this.lang;
       utterance.onboundary = () => this.avatar.wordBoundary();
       utterance.onend = done;
@@ -236,12 +247,6 @@ class Speaker {
   }
 }
 
-function pickVoice(lang) {
-  if (!("speechSynthesis" in window)) return null;
-  const voices = speechSynthesis.getVoices();
-  const base = lang.split("-")[0];
-  return voices.find((v) => v.lang === lang) ?? voices.find((v) => v.lang.startsWith(base)) ?? null;
-}
 // Chrome loads voices asynchronously.
 if ("speechSynthesis" in window) speechSynthesis.onvoiceschanged = () => speechSynthesis.getVoices();
 
@@ -277,6 +282,21 @@ function setupRecognition() {
         finalText = "";
         sendTurn(text);
       }, 700);
+    }
+  };
+  recognition.onerror = (event) => {
+    const problems = {
+      "not-allowed": "Microphone access is blocked. Allow it from the icon in your browser's address bar, then tap Start talking again.",
+      "service-not-allowed": "Microphone access is blocked. Allow it from the icon in your browser's address bar, then tap Start talking again.",
+      "audio-capture": "No microphone was found. Check that one is plugged in and selected in your system settings.",
+      network: "Speech recognition needs an internet connection (the browser sends your speech to its own service to transcribe).",
+    };
+    const message = problems[event.error];
+    if (!message) return; // "no-speech" and "aborted" are normal; recognition just restarts.
+    $("mic-note").textContent = message;
+    if (event.error !== "network") {
+      state.listening = false;
+      updateMicButton();
     }
   };
   // Chrome ends recognition after silence; keep it going while the user wants to talk.
@@ -321,6 +341,37 @@ $("mic").onclick = () => {
     if (!state.busy) setStatus("Your turn");
   }
 };
+
+// A live level bar under the mic button, so the user can see they're being heard.
+let meter = null;
+
+function startMicMeter(stream) {
+  stopMicMeter();
+  if (!stream.getAudioTracks().length || !window.AudioContext) return;
+  const context = new AudioContext();
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 512;
+  context.createMediaStreamSource(stream).connect(analyser);
+  const samples = new Uint8Array(analyser.fftSize);
+  meter = { context, running: true };
+  const tick = () => {
+    if (!meter?.running) return;
+    analyser.getByteTimeDomainData(samples);
+    let peak = 0;
+    for (const s of samples) peak = Math.max(peak, Math.abs(s - 128));
+    $("mic-level-fill").style.width = `${Math.min(100, (peak / 128) * 250)}%`;
+    requestAnimationFrame(tick);
+  };
+  tick();
+}
+
+function stopMicMeter() {
+  if (!meter) return;
+  meter.running = false;
+  meter.context.close().catch(() => {});
+  meter = null;
+  $("mic-level-fill").style.width = "0";
+}
 
 // ---------- Other controls ----------
 
