@@ -1,0 +1,15 @@
+# AI companion voice agent. Versions pinned to match each other; LiveKit plugins
+# are released in lockstep with livekit-agents.
+livekit-agents==1.8.10
+livekit-plugins-anthropic==1.8.10
+livekit-plugins-deepgram==1.8.10
+livekit-plugins-cartesia==1.8.10
+livekit-plugins-elevenlabs==1.8.10
+livekit-plugins-silero==1.8.10
+livekit-plugins-tavus==1.8.10
+livekit-plugins-simli==1.8.10
+livekit-plugins-anam==1.8.10
+livekit-plugins-bey==1.8.10
+httpx==0.28.1
+pytest==8.4.2
+pytest-asyncio==1.2.0

@@ -1,4 +1,4 @@
-import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
+import { AccessToken, AgentDispatchClient, RoomServiceClient } from "livekit-server-sdk";
 
 // How a matched pair's audio and video travel.
 //
@@ -10,7 +10,16 @@ import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
 //   for live adult content.
 export interface MediaRouter {
   // Opens a room for the call and returns what each participant needs to join it.
-  openCall(callId: string, participants: { userId: string; displayName: string }[]): Promise<Map<string, JoinInfo>>;
+  // `extraSeats` leaves room for non-human participants (an AI agent and its
+  // avatar); `allowData` lets participants send typed messages and camera
+  // events to the agent. Calls between people get neither.
+  openCall(
+    callId: string,
+    participants: { userId: string; displayName: string }[],
+    opts?: { extraSeats?: number; allowData?: boolean },
+  ): Promise<Map<string, JoinInfo>>;
+  // Sends a named AI agent worker into the call's room, with call details as metadata.
+  dispatchAgent(callId: string, agentName: string, metadata: string): Promise<void>;
   // Closes the room, disconnecting everyone in it. Safe to call more than once.
   closeCall(callId: string): Promise<void>;
 }
@@ -29,12 +38,14 @@ export function liveKitFromEnv(): MediaRouter | null {
 }
 
 export function liveKitRouter(opts: { url: string; apiKey: string; apiSecret: string }): MediaRouter {
-  const rooms = new RoomServiceClient(opts.url.replace(/^ws/, "http"), opts.apiKey, opts.apiSecret);
+  const httpUrl = opts.url.replace(/^ws/, "http");
+  const rooms = new RoomServiceClient(httpUrl, opts.apiKey, opts.apiSecret);
+  const dispatch = new AgentDispatchClient(httpUrl, opts.apiKey, opts.apiSecret);
   return {
-    async openCall(callId, participants) {
+    async openCall(callId, participants, { extraSeats = 0, allowData = false } = {}) {
       // Room is created up front with a short empty timeout, so a room nobody
       // joins (or everyone leaves) cleans itself up.
-      await rooms.createRoom({ name: callId, emptyTimeout: 30, maxParticipants: participants.length });
+      await rooms.createRoom({ name: callId, emptyTimeout: 30, maxParticipants: participants.length + extraSeats });
       const join = new Map<string, JoinInfo>();
       for (const p of participants) {
         const token = new AccessToken(opts.apiKey, opts.apiSecret, {
@@ -43,10 +54,13 @@ export function liveKitRouter(opts: { url: string; apiKey: string; apiSecret: st
           // Only needs to last until they connect.
           ttl: "2m",
         });
-        token.addGrant({ room: callId, roomJoin: true, canPublish: true, canSubscribe: true, canPublishData: false });
+        token.addGrant({ room: callId, roomJoin: true, canPublish: true, canSubscribe: true, canPublishData: allowData });
         join.set(p.userId, { url: opts.url, token: await token.toJwt() });
       }
       return join;
+    },
+    async dispatchAgent(callId, agentName, metadata) {
+      await dispatch.createDispatch(callId, agentName, { metadata });
     },
     async closeCall(callId) {
       await rooms.deleteRoom(callId).catch(() => {});

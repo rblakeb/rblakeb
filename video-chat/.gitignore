@@ -1,3 +1,7 @@
 node_modules/
 .env
 .data/
+public/models/
+agent/.venv/
+__pycache__/
+.pytest_cache/

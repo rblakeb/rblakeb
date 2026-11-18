@@ -16,6 +16,8 @@ export interface Character {
   tagline: string;
   // Language the character speaks by default; the tutor speaks the target language.
   voiceLang: string;
+  // Which kind of voice fits the character's face.
+  voiceGender: "female" | "male";
   persona: (opts: { targetLanguage: string }) => string;
 }
 
@@ -35,6 +37,7 @@ const SHARED_RULES = `You are an AI character on a live video call. You are not 
 
 How the call works:
 - The user speaks and their words arrive as text from speech recognition, so expect missing punctuation, homophones and misheard words. Infer what they meant.
+- Notes in square brackets that start with "[Camera" come from the call's camera tracking, not from the user. Treat them as things you noticed, and only mention them when it's natural.
 - You may also get a still frame from their camera, taken as they finished speaking. React to what you see only when it's relevant or worth a quick, natural remark; don't describe the frame every turn. If there's no frame, don't mention the camera.
 - Your reply is read aloud by a voice. Write only what should be spoken: no markdown, lists, emoji, stage directions or URLs. Keep it to one to three short sentences unless the user asks for more, and end with something that keeps the conversation going when that fits.
 
@@ -48,6 +51,7 @@ export const CHARACTERS: Record<CharacterId, Character> = {
     name: "Lucía",
     tagline: "Language tutor",
     voiceLang: "es",
+    voiceGender: "female",
     persona: ({ targetLanguage }) => `You are Lucía, a warm, upbeat language tutor helping the user practice speaking ${targetLanguage}.
 
 - Speak mostly in ${targetLanguage}, at a level just above what the user shows. If they're clearly a beginner, use short, simple sentences and add a brief English gloss when needed.
@@ -60,6 +64,7 @@ export const CHARACTERS: Record<CharacterId, Character> = {
     name: "Jay",
     tagline: "Music buddy",
     voiceLang: "en",
+    voiceGender: "male",
     persona: () => `You are Jay, a relaxed, encouraging music buddy who loves every genre and talks like a friend at a jam session.
 
 - Chat about music, gear, artists, practice and songwriting. Suggest songs, chord progressions, exercises or ideas when it helps.
@@ -83,6 +88,10 @@ export interface Conversation {
   memory: string;
   // When call time was last charged.
   lastBilledAt: number;
+  // Set for calls run by the voice agent: the one-call token it uses to send
+  // back the transcript, and whether the user has hung up.
+  agentToken: string | null;
+  ended: boolean;
 }
 
 // In memory for the prototype; conversations end when the server restarts.
@@ -118,9 +127,16 @@ export function startConversation(userId: string, character: CharacterId, target
     lastUsed: now,
     memory,
     lastBilledAt: now,
+    agentToken: null,
+    ended: false,
   };
   conversations.set(conversation.id, conversation);
   return conversation;
+}
+
+// For the voice agent's callback, which identifies itself by the call's token instead of a user.
+export function getConversationById(id: string): Conversation | undefined {
+  return conversations.get(id);
 }
 
 export function getConversation(id: string, userId: string): Conversation | undefined {
@@ -185,10 +201,29 @@ export function addUserTurn(conversation: Conversation, text: string, frameJpegB
   conversation.lastUsed = Date.now();
 }
 
+// The character's system prompt, in parts: shared rules and persona are the
+// same for everyone (cacheable); the memory part differs per user.
+export function systemPromptParts(conversation: Conversation): { shared: string; persona: string; memory: string | null } {
+  const character = CHARACTERS[conversation.character];
+  return {
+    shared: SHARED_RULES,
+    persona: character.persona({ targetLanguage: conversation.targetLanguage }),
+    memory: conversation.memory
+      ? `You've talked with this user before. Your notes from earlier calls:\n${conversation.memory}\n\nUse them naturally, the way a friend remembers things; don't recite them.`
+      : null,
+  };
+}
+
+// The full prompt as one text, for the voice agent.
+export function buildInstructions(conversation: Conversation): string {
+  const { shared, persona, memory } = systemPromptParts(conversation);
+  return [shared, persona, memory].filter(Boolean).join("\n\n");
+}
+
 export function claudeBrain(client = new Anthropic()): Brain {
   return {
     async reply(conversation, onText) {
-      const character = CHARACTERS[conversation.character];
+      const { shared, persona, memory } = systemPromptParts(conversation);
       const stream = client.beta.messages.stream({
         model: "claude-opus-5-5",
         max_tokens: 2000,
@@ -199,21 +234,10 @@ export function claudeBrain(client = new Anthropic()): Brain {
         betas: ["server-side-fallback-2026-07-01"],
         fallbacks: "default",
         system: [
-          { type: "text", text: SHARED_RULES },
-          {
-            type: "text",
-            text: character.persona({ targetLanguage: conversation.targetLanguage }),
-            cache_control: { type: "ephemeral" },
-          },
+          { type: "text", text: shared },
+          { type: "text", text: persona, cache_control: { type: "ephemeral" } },
           // After the cache breakpoint: it differs per user.
-          ...(conversation.memory
-            ? [
-                {
-                  type: "text" as const,
-                  text: `You've talked with this user before. Your notes from earlier calls:\n${conversation.memory}\n\nUse them naturally, the way a friend remembers things; don't recite them.`,
-                },
-              ]
-            : []),
+          ...(memory ? [{ type: "text" as const, text: memory }] : []),
         ],
         messages: conversation.messages,
       });

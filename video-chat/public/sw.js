@@ -1,6 +1,6 @@
 // Caches the app shell so the installed app opens instantly. Live data (API,
 // WebSocket signaling, payments, verification) always goes to the network.
-const CACHE = "shell-v8";
+const CACHE = "shell-v9";
 const SHELL = [
   "/",
   "/index.html",

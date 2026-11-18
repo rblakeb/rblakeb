@@ -90,6 +90,42 @@ voice while an animated face (`public/avatar.js`) lip-syncs.
   users can type), the face is a drawing rather than a realistic avatar, Jay can't hear
   instruments (only words and the camera).
 
+## Voice agent (server-side voice, camera reactions, realistic avatar)
+
+`agent/` is a Python service that runs companion calls on the server instead of in the
+browser. With `COMPANION_AGENT=1` and LiveKit configured, starting a call opens a LiveKit
+room and dispatches the agent into it with the character's instructions (built by
+`buildInstructions` in `server/src/companion.ts`, so both modes run the same characters).
+
+- **Hearing:** Deepgram speech-to-text, any browser (learners can mix English in).
+- **Speaking:** Cartesia or ElevenLabs voices, chosen per character; the user can interrupt.
+- **Seeing:** the newest camera frame goes with every reply.
+- **Reacting:** the browser runs MediaPipe face and hand tracking on the user's device
+  (`public/behavior.js`, rules in `public/behaviorEvents.js`) and sends events like smile,
+  laugh, wave, thumbs up, looking away and leaving the frame. They reach the character as
+  notes, and a wave, thumbs up or coming back gets an unprompted reaction (at most every
+  25 seconds). No video leaves the device for this part.
+- **Avatar:** set `AVATAR_PROVIDER` (Tavus, Simli, Anam or bey) and a face ID per
+  character for a photorealistic, lip-synced video avatar; otherwise the drawn face moves
+  its mouth with the agent's real voice.
+- Reminds the user it's an AI every 3 hours (New York's companion law).
+- When the call ends it posts the transcript to
+  `/internal/companions/conversations/:id/transcript` with a one-call token, and the
+  website updates the character's memory. Billing stays on the website; running out of
+  time closes the room.
+- Missing keys degrade instead of failing: no speech keys means a text-only call, no
+  Anthropic key means canned test replies.
+
+```bash
+cd agent
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python agent.py dev      # needs LIVEKIT_* (and the keys above) in the environment
+.venv/bin/python -m pytest tests
+npm run models                     # once, from video-chat/: serve tracking models locally
+```
+
+Settings are listed in `.env.example`.
+
 ## How it works
 
 | Piece | File |

@@ -22,6 +22,14 @@ export class Avatar {
     requestAnimationFrame((t) => this.frame(t));
   }
 
+  // Drives the mouth from the character's real voice (0..1 loudness) instead of
+  // guessing from text; used when the voice comes from the server agent.
+  setLevel(level) {
+    this.driven = true;
+    this.speaking = level > 0.03;
+    this.mouthTarget = this.speaking ? Math.min(1, level * 4) : 0;
+  }
+
   setSpeaking(speaking) {
     this.speaking = speaking;
     if (!speaking) this.mouthTarget = 0;
@@ -39,7 +47,7 @@ export class Avatar {
 
   frame(t) {
     if (!this.running) return;
-    if (this.speaking && t - this.lastMouthChange > 90) {
+    if (!this.driven && this.speaking && t - this.lastMouthChange > 90) {
       this.mouthTarget = 0.25 + Math.random() * 0.75;
       this.lastMouthChange = t;
     }

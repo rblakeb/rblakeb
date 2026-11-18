@@ -1,3 +1,4 @@
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +23,8 @@ import {
   LANGUAGES,
   addUserTurn,
   brainFromEnv,
+  buildInstructions,
+  getConversationById,
   endConversation,
   getCharacter,
   getConversation,
@@ -64,11 +67,18 @@ const notifier = consoleNotifier;
 
 const hub = new SignalingHub(media);
 const brain = brainFromEnv();
+// With a media server and COMPANION_AGENT=1, companion calls are run by the
+// voice agent in agent/ (server-side speech, voice, avatar) instead of the
+// browser's built-in speech. The agent calls back to AGENT_CALLBACK_BASE.
+const agentCalls = media !== null && process.env.COMPANION_AGENT === "1";
+const agentCallbackBase = (process.env.AGENT_CALLBACK_BASE ?? `http://localhost:${PORT}`).replace(/\/$/, "");
 const app = express();
-// Companion turns carry a camera frame, so they get a larger body limit than everything else.
-const isCompanionTurn = (p: string) => /^\/api\/companions\/conversations\/[^/]+\/turn$/.test(p);
+// Companion turns carry a camera frame and agent transcripts can be long, so
+// those routes set their own body limits; everything else gets a small one.
+const hasOwnBodyLimit = (p: string) =>
+  /^\/api\/companions\/conversations\/[^/]+\/turn$/.test(p) || /^\/internal\/companions\/conversations\/[^/]+\/transcript$/.test(p);
 const smallJson = express.json({ limit: "16kb" });
-app.use((req, res, next) => (isCompanionTurn(req.path) ? next() : smallJson(req, res, next)));
+app.use((req, res, next) => (hasOwnBodyLimit(req.path) ? next() : smallJson(req, res, next)));
 
 type AuthedRequest = Request & { user: User };
 
@@ -192,7 +202,37 @@ app.post(
     const memory = await getMemory(req.user.id, character.id);
     const conversation = startConversation(req.user.id, character.id, String(req.body?.language ?? "es"), memory);
     const voiceLang = character.id === "tutor" ? String(req.body?.language ?? "es") : character.voiceLang;
-    res.json({ conversationId: conversation.id, name: character.name, voiceLang, secondsRemaining: req.user.companionSeconds });
+    const started = { conversationId: conversation.id, name: character.name, voiceLang, secondsRemaining: req.user.companionSeconds };
+    if (!agentCalls || !media) return res.json(started);
+
+    // Agent call: open a room with seats for the agent and its avatar, then send the agent in.
+    conversation.agentToken = randomUUID();
+    try {
+      const join = await media.openCall(conversation.id, [{ userId: req.user.id, displayName: req.user.displayName }], {
+        extraSeats: 2,
+        allowData: true,
+      });
+      await media.dispatchAgent(
+        conversation.id,
+        "companion",
+        JSON.stringify({
+          conversationId: conversation.id,
+          character: character.id,
+          name: character.name,
+          voiceLang,
+          voiceGender: character.voiceGender,
+          instructions: buildInstructions(conversation),
+          callbackUrl: `${agentCallbackBase}/internal/companions/conversations/${conversation.id}/transcript`,
+          callbackToken: conversation.agentToken,
+        }),
+      );
+      res.json({ ...started, livekit: join.get(req.user.id) });
+    } catch (err) {
+      console.error("Couldn't start agent call:", err);
+      endConversation(conversation.id);
+      await media.closeCall(conversation.id);
+      res.status(502).json({ error: "media_unavailable" });
+    }
   }),
 );
 
@@ -220,20 +260,59 @@ app.post(
   "/api/companions/conversations/:id/heartbeat",
   authed(async (req, res) => {
     const conversation = getConversation(String(req.params.id), req.user.id);
-    if (!conversation) return res.status(404).json({ error: "unknown_conversation" });
+    if (!conversation || conversation.ended) return res.status(404).json({ error: "unknown_conversation" });
     conversation.lastUsed = Date.now();
-    res.json(await chargeElapsed(conversation));
+    const balance = await chargeElapsed(conversation);
+    // Out of time: hang up the agent's call too.
+    if (balance.exhausted && conversation.agentToken) await endAgentCall(conversation);
+    res.json(balance);
   }),
 );
+
+// Stops billing and closes the room. The agent then sends its transcript,
+// which is when the character's memory gets updated.
+async function endAgentCall(conversation: Conversation): Promise<void> {
+  conversation.ended = true;
+  await media?.closeCall(conversation.id);
+}
 
 app.post(
   "/api/companions/conversations/:id/end",
   authed(async (req, res) => {
     const conversation = getConversation(String(req.params.id), req.user.id);
-    if (!conversation) return res.status(404).json({ error: "unknown_conversation" });
-    endConversation(conversation.id);
+    if (!conversation || conversation.ended) return res.status(404).json({ error: "unknown_conversation" });
     const balance = await chargeElapsed(conversation);
+    if (conversation.agentToken) {
+      await endAgentCall(conversation);
+      return res.json(balance);
+    }
+    endConversation(conversation.id);
     res.json(balance);
+    await wrapUp(conversation);
+  }),
+);
+
+// The voice agent sends the call's transcript here when the call ends. It
+// proves which call it's for with that call's one-time token.
+app.post(
+  "/internal/companions/conversations/:id/transcript",
+  express.json({ limit: "512kb" }),
+  route(async (req, res) => {
+    const conversation = getConversationById(String(req.params.id));
+    const token = Buffer.from(req.header("authorization")?.replace(/^Bearer /, "") ?? "");
+    const expected = Buffer.from(conversation?.agentToken ?? "");
+    if (!conversation || !expected.length || token.length !== expected.length || !timingSafeEqual(token, expected)) {
+      return res.status(404).end();
+    }
+    const lines: unknown[] = Array.isArray(req.body?.lines) ? req.body.lines : [];
+    conversation.messages = lines.flatMap((line) => {
+      const { role, text } = (line ?? {}) as { role?: unknown; text?: unknown };
+      if ((role !== "user" && role !== "assistant") || typeof text !== "string" || !text) return [];
+      return [{ role, content: text.slice(0, 4000) }];
+    });
+    endConversation(conversation.id);
+    conversation.agentToken = null;
+    res.json({ ok: true });
     await wrapUp(conversation);
   }),
 );
@@ -246,6 +325,8 @@ app.post(
   authed(async (req, res) => {
     const conversation = getConversation(String(req.params.id), req.user.id);
     if (!conversation) return res.status(404).json({ error: "unknown_conversation" });
+    // Agent calls talk to the agent over the room, not through this route.
+    if (conversation.agentToken) return res.status(409).json({ error: "agent_call" });
     // The browser flags the call's first turn; the server supplies the hidden opener line.
     const text = req.body?.opener === true ? CALL_OPENER : String(req.body?.text ?? "").slice(0, 2000);
     const frame = typeof req.body?.frame === "string" ? req.body.frame : undefined;
@@ -295,7 +376,11 @@ app.delete(
 );
 
 setInterval(() => {
-  for (const conversation of takeIdleConversations()) wrapUp(conversation);
+  for (const conversation of takeIdleConversations()) {
+    // An agent call nobody's using any more: hang the agent up as well.
+    if (conversation.agentToken && !conversation.ended) media?.closeCall(conversation.id).catch(() => {});
+    wrapUp(conversation);
+  }
 }, 60_000).unref();
 
 // Shutting the site down: closes credit sales and refunds every unused credit.
@@ -361,6 +446,8 @@ if (!IS_PROD) {
 
 registerSeo(app, publicDir, PORT);
 app.use(express.static(publicDir));
+// MediaPipe (camera behavior tracking) runs in the browser from our own origin.
+app.use("/vendor/mediapipe", express.static(path.join(rootDir, "node_modules/@mediapipe/tasks-vision")));
 // The LiveKit browser client, served from our own origin rather than a CDN.
 app.get("/vendor/livekit-client.esm.mjs", (_req, res) =>
   res.sendFile(path.join(rootDir, "node_modules/livekit-client/dist/livekit-client.esm.mjs")),

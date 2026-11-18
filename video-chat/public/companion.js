@@ -1,5 +1,7 @@
 import { Avatar } from "./avatar.js";
 import { pickVoice } from "./voices.js";
+import { joinAgentCall } from "./agentCall.js";
+import { watchBehavior } from "./behavior.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -26,6 +28,10 @@ const state = {
   balance: { seconds: 0, credits: 0 },
   heartbeat: null,
   countdown: null,
+  // Set during calls run by the server's voice agent (see agentCall.js).
+  agentCall: null,
+  stopBehavior: null,
+  micOn: true,
 };
 
 // How often the browser reports call time to the server.
@@ -222,8 +228,8 @@ async function startCall(character) {
   state.character = character;
   state.voiceLang = started.voiceLang;
 
-  // The microphone track is only used for the level meter; speech recognition
-  // opens the mic itself. Nothing from the mic is sent to the server.
+  // In browser-speech calls the mic track only feeds the level meter (speech
+  // recognition opens the mic itself); in agent calls it's sent to the agent.
   state.stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
   $("local").srcObject = state.stream;
   startMicMeter(state.stream);
@@ -233,14 +239,90 @@ async function startCall(character) {
   $("messages").innerHTML = "";
   $("partner-info").textContent = started.name;
   state.avatar = new Avatar($("avatar"), character);
-  setupRecognition();
-  setStatus("Say hello, or type below");
-
+  showAvatarVideo(null);
   startCallClock();
   renderBalance();
 
+  if (started.livekit) return startAgentCall(started);
+
+  setupRecognition();
+  setStatus("Say hello, or type below");
   // The character opens the conversation.
   await sendTurn("", { opener: true });
+}
+
+// ---------- Calls run by the server's voice agent ----------
+
+const AGENT_STATES = { initializing: "Connecting…", listening: "Listening…", thinking: "Thinking…", speaking: "Speaking…" };
+
+async function startAgentCall(started) {
+  setStatus("Connecting…");
+  state.micOn = true;
+  $("mic-note").textContent = "You're on a live voice call: just talk. You can also type below.";
+  updateMicButton();
+  const bubbles = new Map();
+  state.agentCall = await joinAgentCall({
+    ...started.livekit,
+    stream: state.stream,
+    onTranscript: ({ segment, fromUser, text }) => {
+      let bubble = bubbles.get(segment);
+      if (!bubble) {
+        bubble = addMessage(fromUser ? "me" : "them", "");
+        bubbles.set(segment, bubble);
+      }
+      bubble.textContent = text;
+      $("messages").scrollTop = $("messages").scrollHeight;
+    },
+    onState: (agentState) => setStatus(AGENT_STATES[agentState] ?? agentState),
+    onAvatarVideo: (track) => showAvatarVideo(track),
+    onAgentAudio: (mediaTrack) => driveAvatarFromAudio(mediaTrack),
+    onDisconnected: () => state.conversationId && outOfTimeOrEnded(),
+  });
+  // Facial expressions, head direction and gestures, tracked on this device.
+  updateMicButton();
+  state.stopBehavior = await watchBehavior($("local"), (kind) => state.agentCall?.sendBehavior(kind));
+}
+
+// A realistic avatar service sends the character as video; show it instead of the drawn face.
+function showAvatarVideo(track) {
+  const video = $("avatar-video");
+  if (track) {
+    track.attach(video);
+    video.hidden = false;
+    $("avatar").hidden = true;
+  } else {
+    video.srcObject = null;
+    video.hidden = true;
+    $("avatar").hidden = false;
+  }
+}
+
+// Moves the drawn face's mouth with the character's actual voice.
+let voiceMeter = null;
+function driveAvatarFromAudio(mediaTrack) {
+  voiceMeter?.context.close().catch(() => {});
+  const context = new AudioContext();
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 512;
+  context.createMediaStreamSource(new MediaStream([mediaTrack])).connect(analyser);
+  const samples = new Uint8Array(analyser.fftSize);
+  voiceMeter = { context };
+  const tick = () => {
+    if (voiceMeter?.context !== context) return;
+    analyser.getByteTimeDomainData(samples);
+    let peak = 0;
+    for (const v of samples) peak = Math.max(peak, Math.abs(v - 128));
+    state.avatar?.setLevel(peak / 128);
+    requestAnimationFrame(tick);
+  };
+  tick();
+}
+
+// The room closed under us: the server ends the call when time runs out.
+function outOfTimeOrEnded() {
+  if (totalSeconds() <= 0) return outOfTime();
+  hangUp();
+  $("picker-status").textContent = "The call ended.";
 }
 
 function hangUp() {
@@ -254,6 +336,14 @@ function hangUp() {
     state.conversationId = null;
   }
   stopCallClock();
+  state.stopBehavior?.();
+  state.stopBehavior = null;
+  const call = state.agentCall;
+  state.agentCall = null;
+  call?.leave();
+  state.micOn = true;
+  voiceMeter?.context.close().catch(() => {});
+  voiceMeter = null;
   for (const details of document.querySelectorAll(".memory[open]")) details.open = false;
   state.busy = false;
   state.listening = false;
@@ -489,10 +579,19 @@ function resumeRecognition() {
 }
 
 function updateMicButton() {
+  if (state.agentCall) {
+    $("mic").textContent = state.micOn ? "🎤 Mic on (tap to mute)" : "🔇 Muted (tap to unmute)";
+    return;
+  }
   $("mic").textContent = state.listening ? "🎤 Listening (tap to mute)" : "🎤 Start talking";
 }
 
 $("mic").onclick = () => {
+  if (state.agentCall) {
+    state.micOn = !state.micOn;
+    state.agentCall.setMicEnabled(state.micOn);
+    return updateMicButton();
+  }
   state.listening = !state.listening;
   updateMicButton();
   if (state.listening) {
@@ -540,6 +639,7 @@ function stopMicMeter() {
 $("camera").onclick = () => {
   state.cameraOn = !state.cameraOn;
   for (const track of state.stream?.getVideoTracks() ?? []) track.enabled = state.cameraOn;
+  state.agentCall?.setCameraEnabled(state.cameraOn);
   $("camera").textContent = state.cameraOn ? "Camera on" : "Camera off";
 };
 
@@ -549,6 +649,12 @@ $("chat-form").onsubmit = (e) => {
   e.preventDefault();
   const text = $("chat-input").value.trim();
   if (!text) return;
+  if (state.agentCall) {
+    $("chat-input").value = "";
+    addMessage("me", text);
+    state.agentCall.sendText(text).catch(() => addMessage("them", "(Couldn't send that. Try again.)"));
+    return;
+  }
   // Keep the message rather than dropping it while the character is still talking.
   if (state.busy) {
     // Remember the usual note so it comes back once the message is sent.
