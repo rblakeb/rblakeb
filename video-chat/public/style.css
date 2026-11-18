@@ -192,3 +192,31 @@ button.badge { padding: 2px 8px; cursor: pointer; }
   .filters { grid-template-columns: 1fr; }
   .remote-wrap { aspect-ratio: 3 / 4; }
 }
+
+/* AI companions */
+.ai-badge { border-color: var(--accent); color: var(--accent); }
+.companion-card { cursor: default; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+.companion-card label { display: flex; flex-direction: column; gap: 4px; }
+.companion-card .primary { margin-top: auto; }
+.companion-card.locked { opacity: 0.6; }
+.avatar-wrap canvas { width: 100%; height: 100%; object-fit: cover; display: block; }
+.call-status {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.6);
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 14px;
+  max-width: 70%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 600px) {
+  .avatar-wrap { aspect-ratio: 4 / 5; }
+  .companions { grid-template-columns: 1fr; }
+  /* The site's phone layout hides card descriptions; companion cards need theirs. */
+  .companion-card .desc { display: flex; }
+}

@@ -16,6 +16,15 @@ import {
   spendOnDayPass,
   windDown,
 } from "./billing.ts";
+import {
+  CHARACTERS,
+  LANGUAGES,
+  addUserTurn,
+  brainFromEnv,
+  getCharacter,
+  getConversation,
+  startConversation,
+} from "./companion.ts";
 import { openDb, setDb } from "./db.ts";
 import { liveKitFromEnv } from "./media.ts";
 import { registerSeo } from "./seo.ts";
@@ -41,8 +50,12 @@ const paymentProvider = mockPaymentProvider;
 const notifier = consoleNotifier;
 
 const hub = new SignalingHub(media);
+const brain = brainFromEnv();
 const app = express();
-app.use(express.json({ limit: "16kb" }));
+// Companion turns carry a camera frame, so they get a larger body limit than everything else.
+const isCompanionTurn = (p: string) => /^\/api\/companions\/conversations\/[^/]+\/turn$/.test(p);
+const smallJson = express.json({ limit: "16kb" });
+app.use((req, res, next) => (isCompanionTurn(req.path) ? next() : smallJson(req, res, next)));
 
 type AuthedRequest = Request & { user: User };
 
@@ -145,6 +158,59 @@ app.post(
   }),
 );
 
+// ---------- AI companions ----------
+
+app.get("/api/companions", (_req, res) => {
+  res.json({
+    characters: Object.values(CHARACTERS).map(({ id, name, tagline, voiceLang }) => ({ id, name, tagline, voiceLang })),
+    languages: LANGUAGES,
+  });
+});
+
+app.post(
+  "/api/companions/:character/start",
+  authed(async (req, res) => {
+    const character = getCharacter(String(req.params.character));
+    if (!character) return res.status(404).json({ error: "unknown_character" });
+    const conversation = startConversation(req.user.id, character.id, String(req.body?.language ?? "es"));
+    const voiceLang = character.id === "tutor" ? String(req.body?.language ?? "es") : character.voiceLang;
+    res.json({ conversationId: conversation.id, name: character.name, voiceLang });
+  }),
+);
+
+const busyConversations = new Set<string>();
+
+app.post(
+  "/api/companions/conversations/:id/turn",
+  express.json({ limit: "1mb" }),
+  authed(async (req, res) => {
+    const conversation = getConversation(String(req.params.id), req.user.id);
+    if (!conversation) return res.status(404).json({ error: "unknown_conversation" });
+    const text = String(req.body?.text ?? "").slice(0, 2000);
+    const frame = typeof req.body?.frame === "string" ? req.body.frame : undefined;
+    if (frame && (frame.length > 1_000_000 || !/^[A-Za-z0-9+/]+=*$/.test(frame))) {
+      return res.status(400).json({ error: "bad_frame" });
+    }
+    // One reply at a time per conversation, so a stuck client can't run up model costs.
+    if (busyConversations.has(conversation.id)) return res.status(409).json({ error: "busy" });
+    busyConversations.add(conversation.id);
+
+    res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+    const send = (event: unknown) => res.write(`data: ${JSON.stringify(event)}\n\n`);
+    try {
+      addUserTurn(conversation, text, frame);
+      await brain.reply(conversation, (delta) => send({ type: "text", text: delta }));
+      send({ type: "done" });
+    } catch (err) {
+      console.error("Companion reply failed:", err);
+      send({ type: "error" });
+    } finally {
+      busyConversations.delete(conversation.id);
+      res.end();
+    }
+  }),
+);
+
 // Shutting the site down: closes credit sales and refunds every unused credit.
 // Disabled unless ADMIN_TOKEN is set.
 app.post(
@@ -214,6 +280,9 @@ app.get("/vendor/livekit-client.esm.mjs", (_req, res) =>
 );
 
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  // Client mistakes the body parser reports (body too large, malformed JSON) keep their 4xx status.
+  const status = (err as { status?: number }).status;
+  if (status && status >= 400 && status < 500) return res.status(status).json({ error: "bad_request" });
   console.error(err);
   res.status(500).json({ error: "server_error" });
 });

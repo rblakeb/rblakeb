@@ -57,6 +57,29 @@ TURN, so calls connect on mobile networks without a separate TURN server.
 In dev mode, age verification and payments go to mock pages (`public/dev/`) where you
 choose the outcome. Those routes are disabled when `NODE_ENV=production`.
 
+## AI companions (prototype)
+
+`/companion.html` is a video call with an AI character instead of a person. The user's speech
+is turned into text by the browser (Web Speech API, Chrome/Edge), a still from their camera
+goes with each turn, and the character's reply streams back and is spoken by the browser's
+voice while an animated face (`public/avatar.js`) lip-syncs.
+
+- Characters: **Lucía**, a language tutor (Spanish, French, German, Italian, Portuguese,
+  Japanese) and **Jay**, a music buddy. Personas and shared rules are in
+  `server/src/companion.ts`.
+- The brain is Claude (`claude-opus-5-5`, low effort for fast replies, streaming, with
+  server-side refusal fallback enabled). Set `ANTHROPIC_API_KEY`; without it, characters
+  answer in test mode with canned replies so the call loop can still be tried.
+- Every character says it's an AI if asked, the page shows a permanent "You're talking to an
+  AI" badge, and the shared rules route self-harm talk to 988, for AI companion laws.
+- Only the newest camera frame is sent each turn; frames are never stored. Conversations
+  live in memory and expire after 30 minutes idle.
+- The flirty/adult companion is not served here: Claude's usage policies don't allow sexual
+  content, so it needs its own model stack.
+- Prototype limits: browser voices and speech recognition vary by browser (Safari/Firefox
+  users can type), the face is a drawing rather than a realistic avatar, Jay can't hear
+  instruments (only words and the camera), and calls aren't billed yet.
+
 ## How it works
 
 | Piece | File |

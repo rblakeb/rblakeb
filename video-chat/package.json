@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "1.4.0",
     "@electric-sql/pglite": "0.3.16",
     "express": "4.21.2",
     "livekit-client": "2.22.4",

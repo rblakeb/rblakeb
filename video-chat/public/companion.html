@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>AI Companions</title>
+  <meta name="robots" content="noindex" />
+  <meta name="theme-color" content="#0f1115" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icons/icon-192.png" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">AI Companions</a>
+    <span class="badge ai-badge">You're talking to an AI</span>
+  </header>
+
+  <!-- Pick a character -->
+  <section id="picker" class="panel">
+    <h1>Who do you want to talk to?</h1>
+    <p class="muted">Every character is an AI. They hear what you say and see you through your camera while you talk.</p>
+    <div class="intents companions">
+      <div class="intent companion-card" data-character="tutor">
+        <span class="title">Lucía · Language tutor</span>
+        <span class="desc">Practice speaking out loud. She corrects you gently and uses what's around you as conversation.</span>
+        <label class="desc">Language
+          <select id="tutor-language"></select>
+        </label>
+        <button type="button" class="primary start-call" data-character="tutor">Call Lucía</button>
+      </div>
+      <div class="intent companion-card" data-character="music">
+        <span class="title">Jay · Music buddy</span>
+        <span class="desc">Talk gear, songs and practice. Show him your instrument.</span>
+        <button type="button" class="primary start-call" data-character="music">Call Jay</button>
+      </div>
+      <div class="intent companion-card adult locked">
+        <span class="title">Flirty companion · 18+</span>
+        <span class="desc">Coming soon, for verified adults.</span>
+      </div>
+    </div>
+    <p id="picker-status" class="status"></p>
+  </section>
+
+  <!-- The call -->
+  <section id="call" hidden>
+    <div class="stage">
+      <div class="remote-wrap avatar-wrap">
+        <canvas id="avatar" width="640" height="480"></canvas>
+        <div id="partner-info" class="partner-info"></div>
+        <div id="call-status" class="call-status">Starting…</div>
+      </div>
+      <video id="local" autoplay playsinline muted></video>
+    </div>
+    <div class="controls">
+      <button id="mic" class="primary">🎤 Start talking</button>
+      <button id="camera">Camera on</button>
+      <button id="hangup" class="danger">End call</button>
+    </div>
+    <p id="mic-note" class="muted small"></p>
+    <div class="chat">
+      <div id="messages" class="messages"></div>
+      <form id="chat-form" class="row">
+        <input id="chat-input" maxlength="500" placeholder="Or type here" autocomplete="off" />
+        <button type="submit">Send</button>
+      </form>
+    </div>
+  </section>
+
+  <script type="module" src="/companion.js"></script>
+</body>
+</html>
