@@ -75,11 +75,20 @@ voice while an animated face (`public/avatar.js`) lip-syncs.
   AI" badge, and the shared rules route self-harm talk to 988, for AI companion laws.
 - Only the newest camera frame is sent each turn; frames are never stored. Conversations
   live in memory and expire after 30 minutes idle.
+- **Billing by the second** (`COMPANION_PRICING` in `server/src/config.ts`): new accounts get
+  5 free minutes; when time runs out, one credit converts into 10 more minutes
+  (`server/src/companionAccount.ts`). The browser reports call time every 10 seconds; gaps
+  are billed at most 30 seconds, so a closed tab isn't charged. A call can't start, and a turn
+  is refused, once time and credits are gone. Credits are now sold to any signed-in user.
+- **Memory between calls:** when a call ends (or goes idle), the character rewrites short
+  notes about the user (`companion_memories` table), which go into its prompt next call.
+  Users can read and erase each character's notes on the picker.
+- Research for the adult companion's model stack is in `docs/adult-companion-research.md`.
 - The flirty/adult companion is not served here: Claude's usage policies don't allow sexual
   content, so it needs its own model stack.
 - Prototype limits: browser voices and speech recognition vary by browser (Safari/Firefox
   users can type), the face is a drawing rather than a realistic avatar, Jay can't hear
-  instruments (only words and the camera), and calls aren't billed yet.
+  instruments (only words and the camera).
 
 ## How it works
 

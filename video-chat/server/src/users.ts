@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { Sex } from "./config.ts";
+import { COMPANION_PRICING, type Sex } from "./config.ts";
 import { getDb, type Db } from "./db.ts";
 
 export interface User {
@@ -18,6 +18,8 @@ export interface User {
   inactivityReminderSentAt: number | null;
   banned: boolean;
   reportCount: number;
+  // AI companion call time left before another credit has to be converted.
+  companionSeconds: number;
 }
 
 // Credits from one purchase. Tracked per purchase so a refund goes back to the
@@ -46,6 +48,7 @@ interface UserRow {
   inactivity_reminder_sent_at: Date | null;
   banned: boolean;
   report_count: number;
+  companion_seconds: number;
 }
 
 interface LotRow {
@@ -84,10 +87,11 @@ export function liveUser(id: string): User | undefined {
 export async function createUser(displayName: string, db: Db = getDb()): Promise<{ user: User; token: string }> {
   const token = randomUUID();
   const id = randomUUID();
-  await db.query("insert into users (id, token_hash, display_name) values ($1, $2, $3)", [
+  await db.query("insert into users (id, token_hash, display_name, companion_seconds) values ($1, $2, $3, $4)", [
     id,
     hashToken(token),
     displayName.trim().slice(0, 32) || "Guest",
+    COMPANION_PRICING.freeTrialMinutes * 60,
   ]);
   return { user: (await loadUser(id, db))!, token };
 }
@@ -120,6 +124,7 @@ export async function loadUser(id: string, db: Db = getDb()): Promise<User | und
     inactivityReminderSentAt: ms(row.inactivity_reminder_sent_at),
     banned: row.banned,
     reportCount: row.report_count,
+    companionSeconds: row.companion_seconds,
   };
   const pinned = live.get(id);
   return pinned ? Object.assign(pinned, fresh) : fresh;
@@ -174,5 +179,6 @@ export function publicProfile(user: User) {
     verifiedAdult: user.verifiedAdult,
     adultPassExpiresAt: user.adultPassExpiresAt,
     credits: creditBalance(user),
+    companionSeconds: user.companionSeconds,
   };
 }

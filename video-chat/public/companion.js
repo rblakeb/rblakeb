@@ -21,15 +21,24 @@ const state = {
   listening: false,
   recognition: null,
   busy: false,
+  pricing: null,
+  // Call time left before another credit is converted, and credits on hand.
+  balance: { seconds: 0, credits: 0 },
+  heartbeat: null,
+  countdown: null,
 };
+
+// How often the browser reports call time to the server.
+const HEARTBEAT_MS = 10_000;
 
 // ---------- Session ----------
 
-async function api(path, body) {
+async function api(path, body, { method, keepalive } = {}) {
   const res = await fetch(path, {
-    method: body ? "POST" : "GET",
+    method: method ?? (body ? "POST" : "GET"),
     headers: { "content-type": "application/json", ...(state.token ? { authorization: `Bearer ${state.token}` } : {}) },
     body: body ? JSON.stringify(body) : undefined,
+    keepalive,
   });
   if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
   return res;
@@ -58,7 +67,12 @@ async function ensureSession() {
 // ---------- Picker ----------
 
 async function initPicker() {
-  const { languages } = await (await api("/api/companions")).json();
+  await ensureSession();
+  const [{ languages, pricing }, config] = await Promise.all([
+    api("/api/companions").then((r) => r.json()),
+    api("/api/config").then((r) => r.json()),
+  ]);
+  state.pricing = pricing;
   $("tutor-language").innerHTML = Object.entries(languages)
     .filter(([code]) => code !== "en")
     .map(([code, name]) => `<option value="${code}">${name}</option>`)
@@ -66,11 +80,135 @@ async function initPicker() {
   for (const btn of document.querySelectorAll(".start-call")) {
     btn.onclick = () => startCall(btn.dataset.character).catch(showPickerError);
   }
+  for (const details of document.querySelectorAll(".memory")) {
+    details.ontoggle = () => details.open && loadMemory(details);
+    details.querySelector(".forget").onclick = () => forgetMemory(details);
+  }
+  renderPacks(config.pricing.packs);
+  await refreshBalance();
 }
 
 function showPickerError(err) {
+  if (err.status === 402) {
+    $("picker-status").textContent = "You're out of call time. Get more below.";
+    $("buy").scrollIntoView({ behavior: "smooth" });
+    return;
+  }
   $("picker-status").textContent =
     err.name === "NotAllowedError" ? "Camera and microphone access is needed for a call." : `Couldn't start the call: ${err.message}`;
+}
+
+// ---------- Call time ----------
+
+async function refreshBalance() {
+  const { user } = await (await api("/api/me")).json();
+  setBalance(user.companionSeconds, user.credits);
+}
+
+function setBalance(seconds, credits) {
+  state.balance = { seconds, credits };
+  renderBalance();
+}
+
+// Everything the user can still talk for: time left plus what their credits would buy.
+function totalSeconds() {
+  return state.balance.seconds + state.balance.credits * state.pricing.minutesPerCredit * 60;
+}
+
+function formatTime(total) {
+  const t = Math.max(0, Math.floor(total));
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const sec = String(t % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
+}
+
+function renderBalance() {
+  const { credits } = state.balance;
+  const total = totalSeconds();
+  $("balance").textContent =
+    total > 0
+      ? `${formatTime(total)} of call time left` + (credits ? ` (includes ${credits} credit${credits === 1 ? "" : "s"})` : "")
+      : "You're out of call time.";
+  $("buy-note").textContent = `1 credit = ${state.pricing.minutesPerCredit} minutes of calls with any character.`;
+  const timer = $("time-left");
+  timer.textContent = `${formatTime(total)} left`;
+  timer.classList.toggle("low", total <= 60);
+}
+
+function renderPacks(packs) {
+  const list = $("pack-list");
+  list.innerHTML = "";
+  for (const pack of packs) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "pack";
+    btn.innerHTML = `<span class="amount">${pack.credits * state.pricing.minutesPerCredit} minutes</span><span class="price">${pack.credits} credits · $${(pack.priceCents / 100).toFixed(2)}</span>`;
+    btn.onclick = async () => {
+      try {
+        const { url } = await (await api("/api/billing/checkout", { packId: pack.id, returnTo: "/companion.html" })).json();
+        location.href = url;
+      } catch (err) {
+        $("picker-status").textContent = err.status === 400 ? "Credit sales are closed." : `Couldn't start checkout: ${err.message}`;
+      }
+    };
+    list.appendChild(btn);
+  }
+}
+
+// Reports call time every few seconds and counts down in between.
+function startCallClock() {
+  stopCallClock();
+  state.heartbeat = setInterval(async () => {
+    try {
+      const balance = await (await api(`/api/companions/conversations/${state.conversationId}/heartbeat`, {})).json();
+      setBalance(balance.secondsRemaining, balance.credits);
+      if (balance.exhausted) outOfTime();
+    } catch {}
+  }, HEARTBEAT_MS);
+  state.countdown = setInterval(() => {
+    // Local estimate between heartbeats; the server's figure replaces it on each heartbeat.
+    if (state.balance.seconds > 0) state.balance.seconds--;
+    else if (state.balance.credits > 0) {
+      state.balance.credits--;
+      state.balance.seconds = state.pricing.minutesPerCredit * 60 - 1;
+    }
+    renderBalance();
+  }, 1000);
+}
+
+function stopCallClock() {
+  clearInterval(state.heartbeat);
+  clearInterval(state.countdown);
+  state.heartbeat = state.countdown = null;
+}
+
+function outOfTime() {
+  hangUp();
+  $("picker-status").textContent = "Your call ended because you're out of call time. Get more below to keep talking.";
+  $("buy").scrollIntoView({ behavior: "smooth" });
+}
+
+// ---------- Memory ----------
+
+const CHARACTER_NAMES = { tutor: "Lucía", music: "Jay" };
+
+async function loadMemory(details) {
+  const notes = details.querySelector(".memory-notes");
+  try {
+    const { notes: text } = await (await api(`/api/companions/${details.dataset.character}/memory`)).json();
+    notes.textContent = text || `Nothing yet. ${CHARACTER_NAMES[details.dataset.character]} will remember things from your calls.`;
+    details.querySelector(".forget").hidden = !text;
+  } catch {
+    notes.textContent = "Couldn't load.";
+  }
+}
+
+async function forgetMemory(details) {
+  const name = CHARACTER_NAMES[details.dataset.character];
+  if (!confirm(`Erase everything ${name} remembers about you?`)) return;
+  await api(`/api/companions/${details.dataset.character}/memory`, undefined, { method: "DELETE" });
+  await loadMemory(details);
 }
 
 // ---------- Call ----------
@@ -79,6 +217,7 @@ async function startCall(character) {
   await ensureSession();
   const language = $("tutor-language").value;
   const started = await (await api(`/api/companions/${character}/start`, { language })).json();
+  $("picker-status").textContent = "";
   state.conversationId = started.conversationId;
   state.character = character;
   state.voiceLang = started.voiceLang;
@@ -97,15 +236,30 @@ async function startCall(character) {
   setupRecognition();
   setStatus("Say hello, or type below");
 
+  startCallClock();
+  renderBalance();
+
   // The character opens the conversation.
-  await sendTurn("(The call just connected. Greet the user and start the conversation.)", { silentUser: true });
+  await sendTurn("", { opener: true });
 }
 
 function hangUp() {
+  if (state.conversationId) {
+    // Settles the last bit of call time and lets the character save what it learned.
+    const id = state.conversationId;
+    api(`/api/companions/conversations/${id}/end`, {}, { keepalive: true })
+      .then((r) => r.json())
+      .then((b) => setBalance(b.secondsRemaining, b.credits))
+      .catch(() => {});
+    state.conversationId = null;
+  }
+  stopCallClock();
+  for (const details of document.querySelectorAll(".memory[open]")) details.open = false;
+  state.busy = false;
   state.listening = false;
   stopMicMeter();
   state.recognition?.abort();
-  speechSynthesis?.cancel();
+  window.speechSynthesis?.cancel();
   state.avatar?.stop();
   for (const track of state.stream?.getTracks() ?? []) track.stop();
   state.stream = null;
@@ -131,12 +285,16 @@ function captureFrame() {
   return canvas.toDataURL("image/jpeg", 0.7).split(",")[1];
 }
 
-async function sendTurn(text, { silentUser = false } = {}) {
+async function sendTurn(text, { opener = false } = {}) {
   if (state.busy || !state.conversationId) return;
   state.busy = true;
   pauseRecognition();
-  if (!silentUser) addMessage("me", text);
+  if (!opener) addMessage("me", text);
   setStatus("Thinking…");
+  if (state.waitNote) {
+    $("mic-note").textContent = state.waitNote;
+    state.waitNote = null;
+  }
 
   const bubble = addMessage("them", "");
   const speaker = new Speaker(state.voiceLang, VOICE_GENDER[state.character], state.avatar, () => {
@@ -146,7 +304,7 @@ async function sendTurn(text, { silentUser = false } = {}) {
   });
 
   try {
-    const res = await api(`/api/companions/conversations/${state.conversationId}/turn`, { text, frame: captureFrame() });
+    const res = await api(`/api/companions/conversations/${state.conversationId}/turn`, { text, opener, frame: captureFrame() });
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -169,6 +327,10 @@ async function sendTurn(text, { silentUser = false } = {}) {
       }
     }
   } catch (err) {
+    if (err.status === 402) {
+      speaker.finish();
+      return outOfTime();
+    }
     bubble.textContent = err.status === 409 ? "(Still answering your last message.)" : "(Couldn't reach the server. Try again.)";
   }
   speaker.finish();
@@ -387,6 +549,13 @@ $("chat-form").onsubmit = (e) => {
   e.preventDefault();
   const text = $("chat-input").value.trim();
   if (!text) return;
+  // Keep the message rather than dropping it while the character is still talking.
+  if (state.busy) {
+    // Remember the usual note so it comes back once the message is sent.
+    state.waitNote ??= $("mic-note").textContent;
+    $("mic-note").textContent = `Let ${CHARACTER_NAMES[state.character]} finish, then send.`;
+    return;
+  }
   $("chat-input").value = "";
   sendTurn(text);
 };
@@ -399,5 +568,8 @@ function addMessage(kind, text) {
   $("messages").scrollTop = $("messages").scrollHeight;
   return div;
 }
+
+// Closing the tab mid-call still ends the call cleanly.
+window.addEventListener("pagehide", () => state.conversationId && hangUp());
 
 initPicker().catch((err) => ($("picker-status").textContent = `Couldn't load: ${err.message}`));

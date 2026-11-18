@@ -57,7 +57,9 @@ You can report a user at any time with the Report button. Our [Content & Moderat
 
 ## 7. Credits and payments
 
-**Prices.** Every room except Adult 18+ is free. Access to the Adult 18+ room for some verified members is paid with credits: 1 credit unlocks the room for 24 hours, and unlocking again before then adds another 24 hours. [Verified members whose ID lists their sex as female enter the Adult 18+ room without credits. *(Counsel: see notes before publishing this.)*] Current credit packs and prices are shown before you buy.
+**AI companions.** Calls with AI companions are billed by the second. New accounts get [5] free minutes; after that each credit converts into [10] minutes of call time when your remaining time runs out. The time you have left is shown before and during every call, and a call ends when your time and credits run out.
+
+**Prices.** Every live video room except Adult 18+ is free. Access to the Adult 18+ room for some verified members is paid with credits: 1 credit unlocks the room for 24 hours, and unlocking again before then adds another 24 hours. [Verified members whose ID lists their sex as female enter the Adult 18+ room without credits. *(Counsel: see notes before publishing this.)*] Current credit packs and prices are shown before you buy.
 
 **Payments.** Credits are bought through our payment processor, [Segpay / processor legal name], which handles your card details. Your card statement will show [STATEMENT DESCRIPTOR]. We never see or store your full card number.
 
@@ -68,7 +70,7 @@ You can report a user at any time with the Report button. Our [Content & Moderat
 - If you don't sign in for [150] days while you hold unused credits, we'll email you. If you still haven't signed in by [180] days, we'll automatically refund them.
 - If we close the Service, we'll stop selling credits and refund all unused credits.
 - If a refund can't be sent to your original payment method (for example, the card has expired or the charge is too old for the processor to refund), your credits stay on your account and we'll refund you another way once you contact us at [SUPPORT EMAIL].
-- Credits that have been used to unlock time are not refundable. Time already unlocked is not refundable.
+- Credits that have been used to unlock time are not refundable. Time already unlocked, including AI companion minutes already converted from a credit, is not refundable.
 
 **Credits have no cash value** except as described above. They can't be transferred, sold or exchanged.
 

@@ -19,6 +19,12 @@ This policy explains what [COMPANY NAME] ("we", "us") collects when you use [SIT
 - Audio and video, sent through our media servers to the person you're matched with. **We don't record calls.** Our moderation tools may analyze still frames automatically, for example to detect nudity in non-adult rooms. A flagged frame may be kept for review, for up to [30 days], or longer if needed for a legal report or investigation.
 - Reports you make or receive, including the reason given.
 
+**When you call an AI companion**
+- What you say, as text from your browser's speech recognition, and a still from your camera with each thing you say. These are sent to our AI provider, [Anthropic], to generate the character's reply. We don't store camera stills. [Counsel: confirm how long the AI provider retains requests.]
+- The conversation is kept in memory only while the call is open and for up to 30 minutes after.
+- **Character memory:** at the end of a call, the character writes short notes about you so it can pick up next time, for example your name, your level, and what you talked about. The notes are written to leave out health, financial and address details. You can read and erase what each character remembers from the character's card at any time.
+- How much call time you've used and have left.
+
 **When you verify your age (Adult 18+ room)**
 Verification is done by our provider, [VERIFICATION PROVIDER, e.g. Didit], which collects a photo of your ID and a live selfie and compares your face to the ID photo. **This involves biometric data. The provider processes it under its own privacy policy and only with your consent, given in the verification flow.** We receive and keep only:
 - whether you passed, and whether you're 18 or older;
@@ -59,6 +65,7 @@ We don't sell your personal information, and we don't use it for targeted advert
   - database hosting: Supabase
   - hosting: [host]
   - moderation tools: [e.g. Hive / Sightengine]
+  - AI models for companion characters: [Anthropic]
   - email: [provider]
 - **The person you're matched with** sees your display name and receives your audio, video and chat during the call.
 - **Law enforcement and NCMEC**, when the law requires it or to protect someone from serious harm.

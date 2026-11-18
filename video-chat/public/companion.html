@@ -20,6 +20,7 @@
   <section id="picker" class="panel">
     <h1>Who do you want to talk to?</h1>
     <p class="muted">Every character is an AI. They hear what you say and see you through your camera while you talk.</p>
+    <p id="balance" class="balance"></p>
     <div class="intents companions">
       <div class="intent companion-card" data-character="tutor">
         <span class="title">Lucía · Language tutor</span>
@@ -28,11 +29,13 @@
           <select id="tutor-language"></select>
         </label>
         <button type="button" class="primary start-call" data-character="tutor">Call Lucía</button>
+        <details class="memory" data-character="tutor"><summary>What Lucía remembers</summary><p class="memory-notes"></p><button type="button" class="forget">Forget</button></details>
       </div>
       <div class="intent companion-card" data-character="music">
         <span class="title">Jay · Music buddy</span>
         <span class="desc">Talk gear, songs and practice. Show him your instrument.</span>
         <button type="button" class="primary start-call" data-character="music">Call Jay</button>
+        <details class="memory" data-character="music"><summary>What Jay remembers</summary><p class="memory-notes"></p><button type="button" class="forget">Forget</button></details>
       </div>
       <div class="intent companion-card adult locked">
         <span class="title">Flirty companion · 18+</span>
@@ -40,6 +43,13 @@
       </div>
     </div>
     <p id="picker-status" class="status"></p>
+
+    <div id="buy" class="packs">
+      <h3>Get more call time</h3>
+      <p id="buy-note" class="muted small"></p>
+      <div id="pack-list" class="pack-list"></div>
+      <p class="muted small">Unused credits never expire and can be refunded.</p>
+    </div>
   </section>
 
   <!-- The call -->
@@ -49,6 +59,7 @@
         <canvas id="avatar" width="640" height="480"></canvas>
         <div id="partner-info" class="partner-info"></div>
         <div id="call-status" class="call-status">Starting…</div>
+        <div id="time-left" class="time-left"></div>
       </div>
       <video id="local" autoplay playsinline muted></video>
     </div>

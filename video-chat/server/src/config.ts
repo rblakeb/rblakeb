@@ -51,6 +51,17 @@ export const REFUND_POLICY = {
   inactivityRefundDays: 180,
 };
 
+// AI companion calls are billed by the second of call time. New accounts get a
+// free trial; after that each credit buys a block of minutes, converted when
+// the balance runs out. Minutes already converted from a credit aren't refundable.
+export const COMPANION_PRICING = {
+  minutesPerCredit: 10,
+  freeTrialMinutes: 5,
+  // The browser reports call time every few seconds; a longer silence (closed
+  // tab, lost connection) is only billed up to this much.
+  maxBilledGapSeconds: 30,
+};
+
 export function getCreditPack(id: string): CreditPack | undefined {
   return CREDIT_PACKS.find((p) => p.id === id);
 }

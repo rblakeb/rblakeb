@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from "express";
 import { WebSocketServer } from "ws";
-import { ADULT_PRICING, CREDIT_PACKS, INTENTS, getCreditPack, type Sex } from "./config.ts";
+import { ADULT_PRICING, COMPANION_PRICING, CREDIT_PACKS, INTENTS, getCreditPack, type Sex } from "./config.ts";
 import { adultIsFreeFor, checkAccess, hasActivePass } from "./access.ts";
 import {
   areSalesClosed,
@@ -17,14 +17,27 @@ import {
   windDown,
 } from "./billing.ts";
 import {
+  CALL_OPENER,
   CHARACTERS,
   LANGUAGES,
   addUserTurn,
   brainFromEnv,
+  endConversation,
   getCharacter,
   getConversation,
+  hasUserSpeech,
   startConversation,
+  takeIdleConversations,
+  type Conversation,
 } from "./companion.ts";
+import {
+  canCall,
+  chargeCallTime,
+  deleteMemory,
+  getMemory,
+  saveMemory,
+  type CallBalance,
+} from "./companionAccount.ts";
 import { openDb, setDb } from "./db.ts";
 import { liveKitFromEnv } from "./media.ts";
 import { registerSeo } from "./seo.ts";
@@ -127,13 +140,15 @@ app.post(
   "/api/billing/checkout",
   authed(async (req, res) => {
     const user = req.user;
-    // Credits only buy adult access, so don't sell them to people who can't use them.
-    if (!user.verifiedAdult) return res.status(400).json({ error: "not_verified" });
-    if (adultIsFreeFor(user)) return res.status(400).json({ error: "already_free" });
+    // Credits pay for AI companion minutes as well as adult-room access, so
+    // anyone signed in can buy them.
     if (await areSalesClosed()) return res.status(400).json({ error: "sales_closed" });
     const pack = getCreditPack(String(req.body?.packId));
     if (!pack) return res.status(400).json({ error: "unknown_pack" });
-    const { url } = await paymentProvider.createCreditCheckout(user, pack, "/");
+    // Send the buyer back to the page they bought from. Only paths on this site:
+    // "//host" and "/\host" would leave it.
+    const returnTo = String(req.body?.returnTo ?? "/");
+    const { url } = await paymentProvider.createCreditCheckout(user, pack, /^\/(?![\/\\])/.test(returnTo) ? returnTo : "/");
     res.json({ url });
   }),
 );
@@ -164,6 +179,7 @@ app.get("/api/companions", (_req, res) => {
   res.json({
     characters: Object.values(CHARACTERS).map(({ id, name, tagline, voiceLang }) => ({ id, name, tagline, voiceLang })),
     languages: LANGUAGES,
+    pricing: COMPANION_PRICING,
   });
 });
 
@@ -172,9 +188,53 @@ app.post(
   authed(async (req, res) => {
     const character = getCharacter(String(req.params.character));
     if (!character) return res.status(404).json({ error: "unknown_character" });
-    const conversation = startConversation(req.user.id, character.id, String(req.body?.language ?? "es"));
+    if (!canCall(req.user)) return res.status(402).json({ error: "no_minutes" });
+    const memory = await getMemory(req.user.id, character.id);
+    const conversation = startConversation(req.user.id, character.id, String(req.body?.language ?? "es"), memory);
     const voiceLang = character.id === "tutor" ? String(req.body?.language ?? "es") : character.voiceLang;
-    res.json({ conversationId: conversation.id, name: character.name, voiceLang });
+    res.json({ conversationId: conversation.id, name: character.name, voiceLang, secondsRemaining: req.user.companionSeconds });
+  }),
+);
+
+// Charges the call time since the last charge, capped so a closed tab or lost
+// connection isn't billed for the gap.
+async function chargeElapsed(conversation: Conversation): Promise<CallBalance> {
+  const now = Date.now();
+  const elapsed = Math.min(now - conversation.lastBilledAt, COMPANION_PRICING.maxBilledGapSeconds * 1000) / 1000;
+  conversation.lastBilledAt = now;
+  return chargeCallTime(conversation.userId, elapsed);
+}
+
+// Saves what the character learned this call. Runs when a call ends or goes idle.
+async function wrapUp(conversation: Conversation): Promise<void> {
+  if (!hasUserSpeech(conversation)) return;
+  try {
+    await saveMemory(conversation.userId, conversation.character, await brain.updateMemory(conversation));
+  } catch (err) {
+    console.error("Couldn't save companion memory:", err);
+  }
+}
+
+// The browser reports call time every few seconds while a call is open.
+app.post(
+  "/api/companions/conversations/:id/heartbeat",
+  authed(async (req, res) => {
+    const conversation = getConversation(String(req.params.id), req.user.id);
+    if (!conversation) return res.status(404).json({ error: "unknown_conversation" });
+    conversation.lastUsed = Date.now();
+    res.json(await chargeElapsed(conversation));
+  }),
+);
+
+app.post(
+  "/api/companions/conversations/:id/end",
+  authed(async (req, res) => {
+    const conversation = getConversation(String(req.params.id), req.user.id);
+    if (!conversation) return res.status(404).json({ error: "unknown_conversation" });
+    endConversation(conversation.id);
+    const balance = await chargeElapsed(conversation);
+    res.json(balance);
+    await wrapUp(conversation);
   }),
 );
 
@@ -186,13 +246,16 @@ app.post(
   authed(async (req, res) => {
     const conversation = getConversation(String(req.params.id), req.user.id);
     if (!conversation) return res.status(404).json({ error: "unknown_conversation" });
-    const text = String(req.body?.text ?? "").slice(0, 2000);
+    // The browser flags the call's first turn; the server supplies the hidden opener line.
+    const text = req.body?.opener === true ? CALL_OPENER : String(req.body?.text ?? "").slice(0, 2000);
     const frame = typeof req.body?.frame === "string" ? req.body.frame : undefined;
     if (frame && (frame.length > 1_000_000 || !/^[A-Za-z0-9+/]+=*$/.test(frame))) {
       return res.status(400).json({ error: "bad_frame" });
     }
     // One reply at a time per conversation, so a stuck client can't run up model costs.
     if (busyConversations.has(conversation.id)) return res.status(409).json({ error: "busy" });
+    const balance = await chargeElapsed(conversation);
+    if (balance.exhausted) return res.status(402).json({ error: "no_minutes", ...balance });
     busyConversations.add(conversation.id);
 
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
@@ -210,6 +273,30 @@ app.post(
     }
   }),
 );
+
+// What a character remembers about the signed-in user, and a way to clear it.
+app.get(
+  "/api/companions/:character/memory",
+  authed(async (req, res) => {
+    const character = getCharacter(String(req.params.character));
+    if (!character) return res.status(404).json({ error: "unknown_character" });
+    res.json({ notes: await getMemory(req.user.id, character.id) });
+  }),
+);
+
+app.delete(
+  "/api/companions/:character/memory",
+  authed(async (req, res) => {
+    const character = getCharacter(String(req.params.character));
+    if (!character) return res.status(404).json({ error: "unknown_character" });
+    await deleteMemory(req.user.id, character.id);
+    res.json({ ok: true });
+  }),
+);
+
+setInterval(() => {
+  for (const conversation of takeIdleConversations()) wrapUp(conversation);
+}, 60_000).unref();
 
 // Shutting the site down: closes credit sales and refunds every unused credit.
 // Disabled unless ADMIN_TOKEN is set.
